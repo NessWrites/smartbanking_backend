@@ -1,0 +1,25 @@
+# Ignore models 
+*.pkl
+*.gguf
+*.sqlite3
+
+
+# Python caches
+__pycache__/
+__init__.py
+
+*.pyc
+
+# Environments
+env/
+venv/
+
+# System files
+.detector
+.DS_Store
+.detector
+
+#files
+test.ipynb
+tests.ipynb
+config.py
