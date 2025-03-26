@@ -9,6 +9,8 @@ from smart_banking.settings import AUTH_USER_MODEL
 from django.contrib.auth.models import AbstractBaseUser,User, BaseUserManager, PermissionsMixin
 from django.db import models
 import statistics
+from datetime import date, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 
 # Custom User Manager
 class UserManager(BaseUserManager):

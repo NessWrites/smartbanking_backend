@@ -1,40 +1,4 @@
 from rest_framework import serializers
-from .models import User, AccountType, Transactions, TransactionType
-
-# class UserSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = User
-#         fields = ['id', 'firstName', 'lastName', 'address', 'district', 'city', 'province',
-#                   'dateOfBirth', 'panNumber', 'email', 'phone', 'username', 'accountNumber']
-#         extra_kwargs = {'password': {'write_only': True}}
-
-#     def create(self, validated_data):
-#         request = self.context.get('request')
-#         if request and not request.user.is_staff:
-#             raise serializers.ValidationError("Only admins can create users.")
-#         return super().create(validated_data)
-
-# class AccountTypeSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = AccountType
-#         fields = '__all__'
-
-# class TransactionSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = Transaction
-#         fields = '__all__'
-
-# class TransactionTypeSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = TransactionType
-#         fields = '__all__'
-
-
-# class ChatRequestSerializer(serializers.Serializer):
-#     message = serializers.CharField(max_length=3024)
-
-# class ChatResponseSerializer(serializers.Serializer):
-#     response = serializers.CharField()
 
 from rest_framework import serializers
 from .models import (
