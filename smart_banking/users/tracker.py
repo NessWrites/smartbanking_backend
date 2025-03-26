@@ -31,8 +31,10 @@ class Tracker:
         """
         origin = db_home
         destination = atm_location
+        print(origin)
+        print(destination)
         url = f'https://api.distancematrix.ai/maps/api/distancematrix/json?origins={origin}&destinations={destination}&key={API_KEY_DISTANCE_AI}'
-        response = requests.get(url)
+        response = requests.get(url,timeout=10)
         data = response.json()
 
         if data['status'] == 'OK':

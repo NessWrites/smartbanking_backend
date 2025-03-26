@@ -79,9 +79,6 @@ class User(AbstractBaseUser, PermissionsMixin):
     phoneNumber = models.CharField(max_length=15,unique=True, null=False, blank=False)
     firstName = models.CharField(max_length=100)
     lastName = models.CharField(max_length=100)
-    # addressID = models.ForeignKey(Address, on_delete=models.CASCADE)
-    # adminID = models.ForeignKey(Admin, on_delete=models.SET_NULL, null=True, blank=True)
-    # customerID = models.ForeignKey(Customers, on_delete=models.SET_NULL, null=True, blank=True)
     address = models.CharField(max_length=50, null = False, blank=False)
     district = models.CharField(max_length=50, null = False, blank=False)
     city = models.CharField(max_length=50, null = False, blank=False)
@@ -90,7 +87,6 @@ class User(AbstractBaseUser, PermissionsMixin):
     panNumber = models.CharField(max_length=20, unique=True)
     createdAt = models.DateTimeField(auto_now_add=True)
     accountNumber = models.PositiveIntegerField(unique=True, blank=True, null=True)
-    #account_balance = models.DecimalField(max_digits=15, decimal_places=2, default=500.00)  # Add balance field
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     USERNAME_FIELD = "phoneNumber"  # Login with email
@@ -131,6 +127,159 @@ class User(AbstractBaseUser, PermissionsMixin):
         if account:
             return account.balance
         return Decimal('0.00')  # Default if no account yet
+    
+    
+    def get_transaction_details(self):
+        # Get all transactions related to the user
+        transactions = Transactions.objects.filter(accountID__user=self)
+        return [
+            {
+                "transactionID": trans.transactionID,
+                "transactionType": trans.transactionTypeID.transactionType,
+                "amount": trans.amount,
+                "reference": trans.reference,
+                "description": trans.description,
+                "date": trans.date,
+            }
+            for trans in transactions
+        ]
+
+    def get_withdraw_details(self):
+        # Get all withdrawals related to the user
+        withdraws = Withdraw.objects.filter(user=self)
+        return [
+            {
+                "withdrawID": withdraw.withdrawID,
+                "withdrawalType": withdraw.withdrawal_type,
+                "amount": withdraw.transaction.amount,
+                "home": withdraw.home,
+                "location": withdraw.location,
+                "retailer": withdraw.retailer,
+                "created_at": withdraw.created_at,
+            }
+            for withdraw in withdraws
+        ]
+
+    def get_user_data(self):
+        # Fetch account balance
+        account = Account.objects.filter(user=self).first()
+        balance = account.balance if account else Decimal('0.00')
+
+        # Fetch transaction and withdrawal details
+        transaction_details = self.get_transaction_details()
+        withdraw_details = self.get_withdraw_details()
+
+        # Return a dictionary with all placeholders
+        return {
+            
+    #Customer ID
+    "Customer ID":self.id,        
+    # First Name variations
+    "firstName": self.firstName,
+    "first_name": self.firstName,
+    "first Name": self.firstName,
+    "Account Name": self.firstName + self.lastName,
+    "Customer Name": self.firstName + self.lastName,
+
+    # Last Name variations
+    "lastName": self.lastName,
+    "last_name": self.lastName,
+    "last Name": self.lastName,
+
+    # Phone Number variations
+    "phoneNumber": self.phoneNumber,
+    "phone_number": self.phoneNumber,
+    "phone Number": self.phoneNumber,
+
+    # Email variations
+    "email": self.email,
+    "e-mail": self.email,
+
+    # Account Number variations
+    "accountNumber": self.accountNumber,
+    "account_number": self.accountNumber,
+    "account Number": self.accountNumber,
+    "Account Number": self.accountNumber,
+
+    # Address variations
+    "address": self.address,
+
+    # District variations
+    "district": self.district,
+
+    # City
+    "city": self.city,
+
+    # Provinces
+    "provinces": self.provinces,
+
+    # Date of Birth variations
+    "dateOfBirth": self.dateOfBirth,
+    "date_of_birth": self.dateOfBirth,
+    "date of birth": self.dateOfBirth,
+
+    # PAN Number variations
+    "panNumber": self.panNumber,
+    "pan_number": self.panNumber,
+    "pan number": self.panNumber,
+
+    # Balance / Account Balance
+    "account_balance": balance,
+    "Account Balance": balance,
+    "account balance": balance,
+    "Balance": balance,
+    "check balance":balance,
+    "Check Balance":balance,
+    "balance": balance,
+
+    # Created At variations
+    "createdAt": self.createdAt,
+    "created_at": self.createdAt,
+    "created at": self.createdAt,
+    
+    #transaction history
+    "transaction_history": self.get_transaction_details(),
+    "withdraw_history": self.get_withdraw_details(),
+
+    # Transaction History variations
+    "transaction_history": transaction_details,
+    "transaction history": transaction_details,
+
+    # Withdraw History variations
+    "withdraw_history": withdraw_details,
+    "withdraw history": withdraw_details,
+
+    # Customer Support Info
+    "customer_support_working_hours": "9 AM - 6 PM",
+    "customer support working hours": "9 AM - 6 PM",
+    "customer_support_phone_number": "+977-9841467002",
+    "customer support phone number": "+977-9841467002",
+    "Customer Support Working Hours": "9 AM - 6 PM",
+
+    # Telephone Banking Number variations
+    "telephone_banking_number": "+977-9841467002",
+    "telephone banking number": "+977-9841467002",
+    "Customer Service Phone Number": "+977-9841467002", 
+    
+
+    # Website variations
+    "company_website": "https://nischhalshrestha.com",
+    "company website": "https://nischhalshrestha.com",
+    "company_website_url": "https://nischhalshrestha.com",
+    "company website url": "https://nischhalshrestha.com",
+    "bank_website": "https://nischhalshrestha.com",
+    "bank website": "https://nischhalshrestha.com",
+    "bank_website_url": "https://nischhalshrestha.com",
+    "bank website url": "https://nischhalshrestha.com",
+    "Bank's Online Banking Portal":"https://nischhalshrestha.com",
+    "Company Website URL": "https://nischhalshrestha.com", 
+    "Banking App": "Smart Banking",
+    "Bank Name": "Smart Banking",
+    "Banking app name": "Smart Banking",
+    "bank name": "Smart Banking",
+    "Customer Support": "Smart Banking",
+}
+
     
     def median_purchase_price(self):
         # Fetch all transactions for the user
