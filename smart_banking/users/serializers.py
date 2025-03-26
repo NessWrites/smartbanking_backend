@@ -1,6 +1,4 @@
 from rest_framework import serializers
-
-from rest_framework import serializers
 from .models import (
      Admin, AccountType, Loans, TransactionType,
     Account, Customers, User, Transactions
