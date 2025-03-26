@@ -15,11 +15,11 @@ env/
 venv/
 
 # System files
-.detector
+/detector/
 .DS_Store
 .detector
 
 #files
-test.ipynb
-tests.ipynb
+class_test.ipynb
+extract_test.ipynb
 config.py
