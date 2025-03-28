@@ -2,6 +2,10 @@
 import json
 from decimal import Decimal, InvalidOperation
 import re
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from .query_processor import QueryProcessor
 
 # Django Imports
 from django.core.exceptions import ValidationError
@@ -41,7 +45,11 @@ from .serializers import (
     UserSerializer, AccountTypeSerializer, TransactionsSerializer, TransactionTypeSerializer
 )
 from .tracker import Tracker
-
+from asgiref.sync import sync_to_async
+from django.http import JsonResponse
+import logging
+from .sync_wrapper import SyncQueryProcessor
+logger = logging.getLogger(__name__)
 # 1. Create User (Superadmin Only)
 class CreateUserView(APIView):
     permission_classes = [IsAdminUser]
@@ -399,96 +407,6 @@ class UserView(APIView):
         user = get_object_or_404(User, pk=pk)
         user.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
-
-# Define the prompt template
-prompt_template = PromptTemplate(
-    input_variables=["query"],
-    template=(
-        "User: {query}\n"
-        "Assistant: Identify the user's intent and provide a **single, complete response**. "
-        "Use placeholders like {{Account Name}}, {{Customer Name}}, {{Customer ID}}, {{Customer Support}}, {{Account Balance}}, etc., for dynamic data.\n"
-        "Format your response **strictly** as follows:\n"
-        "Intent: <intent_here>\n"
-        "Response: <detailed_response_here>\n"
-        "Ensure the response is complete and does not end abruptly. Do not include any additional text, instructions, or explanations. Only provide the intent and response."
-    )
-)
-#Define a function to fetch user data from the database (this can be improved based on your needs)
-def fetch_user_data(user_id):
-    try:
-        # Fetch user from your Django database
-        user = User.objects.get(accountNumber=user_id)
-        
-        # For example, returning the balance and recent transactions
-        user_data = {
-            "balance": user.balance,
-            "last_transactions": user.get_last_transactions(),
-            "account_number": user.accountNumber,
-        }
-        return user_data
-    except User.DoesNotExist:
-        return None
-
-# Define a basic retriever using the user data
-class SimpleRetriever:
-    def __init__(self, user_id):
-        self.user_id = user_id
-    
-    def retrieve(self, query):
-        user_data = fetch_user_data(self.user_id)
-        
-        if user_data is None:
-            return f"Sorry, I couldn't find the account information for user {self.user_id}."
-        
-        # Example retrieval logic: Return user balance if asking for balance
-        if "balance" in query.lower():
-            return f"Your current balance is {user_data['balance']}."
-        
-        # You can add more conditions based on the query
-        return f"Recent transactions: {user_data['last_transactions']}"
-
-# Load the Llama model (as before)
-model_path = "/Users/ness/Islington/unsloth.Q4_K_M.gguf"
-llm = LlamaCpp(model_path=model_path)
-
-# # Define the prompt template
-# prompt_template = PromptTemplate(
-#     input_variables=["query", "retrieved_data"],
-#     template="You are a helpful assistant. Here is the user's data: {retrieved_data}. Now, based on the query: {query}, provide a response."
-# )
-
-# # Define a new chain that includes both retrieval and language model processing
-# def create_chain(user_id):
-#     retriever = SimpleRetriever(user_id)
-    
-#     # Here, the retrieval happens first, then the LLM is used to generate the response
-#     chain = LLMChain(llm=llm, prompt=prompt_template)
-#     return chain, retriever
-# Define the prompt template
-# prompt_template = PromptTemplate(
-#     input_variables=["query"],
-#     template=(
-#         "You are a helpful assistant. Provide detailed information about the user based on the following query: {query}\n"
-#         "If the query is about account balance or transactions, retrieve the data from the database and include it in the response."
-#     )
-# )
-
-# Initialize the chain
-chain = LLMChain(llm=llm, prompt=prompt_template)
-
-# # Initialize embeddings and vector store (for RAG)
-# embeddings = HuggingFaceEmbeddings()
-# vector_store = FAISS.load_local("/Users/ness/Islington/smartbanking_backend/smart_banking/users", embeddings,allow_dangerous_deserialization=True)  # Load your pre-built vector store
-
-# # Initialize RetrievalQA chain
-# retrieval_chain = RetrievalQA.from_chain_type(
-#     llm=llm,
-#     chain_type="stuff",
-#     retriever=vector_store.as_retriever(),
-#     chain_type_kwargs={"prompt": prompt_template}
-# )
-
-
 # Authentication Check
 def is_authenticated(user_id):
     try:
@@ -497,146 +415,24 @@ def is_authenticated(user_id):
         return True
     except User.DoesNotExist:
         return False
-    
-# Process Query Function
-def process_query(query, user_id):
-    if not is_authenticated(user_id):
-        # Unauthenticated user: Use the fine-tuned model directly
-        output = llm(query, max_tokens=400, temperature=0.7, top_p=0.9)
-        if 'choices' in output and output['choices']:
-            return output['choices'][0]['text'].strip()
-        else:
-            return "Sorry, I couldn't generate a response."
-    else:
-        # Authenticated user: Use LangChain to retrieve and process user-specific data
-        try:
-            # Fetch user data
-            user = User.objects.get(accountNumber=user_id)
-            user_data = user.get_user_data()
 
-            # Detect intent based on the query
-            intent = detect_intent(query)
-
-            # Handle specific intents
-            if intent == "check_balance":
-                # Fetch account balance from the database
-                balance = user_data.get("Account Balance", "not available")
-                response = f"Your account balance is {balance}."
-            elif intent == "recent_transactions":
-                # Fetch recent transactions from the database
-                transactions = user.get_transaction_details()[:5]  # Last 5 transactions
-                response = "Your last 5 transactions are:\n"
-                for transaction in transactions:
-                    response += f"- {transaction['transactionType']}: {transaction['amount']} on {transaction['date']}\n"
-            else:
-                # Use RAG for other queries
-                response = llm.invoke(query)
-
-            return response
-
-        except User.DoesNotExist:
-            return "User not found."
-        except Exception as e:
-            return f"An error occurred: {str(e)}"
-
-# Intent Detection Function
-def detect_intent(query):
-    """
-    Detects the intent of the user's query.
-    """
-    query = query.lower()
-
-    if "balance" in query or "check balance" in query:
-        return "check_balance"
-    elif "transaction" in query or "recent transactions" in query:
-        return "recent_transactions"
-    else:
-        return "unknown"
-    
-# def process_query(query, user_id):
-#     if not is_authenticated(user_id):
-#         # Unauthenticated user: Use the fine-tuned model directly
-#         output = llm(query, max_tokens=300, temperature=0.7, top_p=0.9)
-#         if 'choices' in output and output['choices']:
-#             return output['choices'][0]['text'].strip()
-#         else:
-#             return "Sorry, I couldn't generate a response."
-#     else:
-#         # Authenticated user: Use LangChain to retrieve and process user-specific data
-#         try:
-#             # Create the retrieval and chain
-#             chain, retriever = create_chain(user_id)
-
-#             # Retrieve the data for the user
-#             retrieved_data = retriever.retrieve(query)
-
-#             # Generate the response using LangChain
-#             response = chain.run({"query": query, "retrieved_data": retrieved_data})
-#             return response
-
-#         except User.DoesNotExist:
-#             return "User not found."
-#         except Exception as e:
-#             return f"An error occurred: {str(e)}"
-
-# Clean Response Function
-def clean_response(response):
-    """
-    Cleans the response to ensure only one intent and response are included.
-    """
-    # Split the response into lines
-    lines = response.split("\n")
-    
-    # Initialize variables to store intent and response
-    intent = None
-    response_text = None
-    
-    # Iterate through lines to find the first valid intent and response
-    for line in lines:
-        if line.startswith("Intent:") and not intent:
-            intent = line.strip()
-        elif line.startswith("Response:") and not response_text:
-            response_text = line.strip()
-        if intent and response_text:
-            break
-    
-    # If both intent and response are found, return them
-    if intent and response_text:
-        return f"{intent}\n{response_text}"
-    else:
-        return f"Intent: unknown\nResponse: Sorry, I couldn't generate a valid response.\n{response_text}"
-
-# Placeholder Replacement Function
-def replace_placeholders(text, user_data):
-    """
-    Replaces placeholders in the text with actual user data.
-    """
-    placeholder_pattern = re.compile(r'\{\{([^}]+)\}\}')
-    def replace_match(match):
-        placeholder = match.group(1).strip()
-        value = user_data.get(placeholder, f"{{{{{placeholder}}}}}")
-        return str(value)
-    return placeholder_pattern.sub(replace_match, text)
-
-# Chat Endpoint
-# Chat Endpoint
-@csrf_exempt
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def chat(request):
-    if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            user_id = data.get("user_id")
-            query = data.get("query")
-
-            if not query or not user_id:
-                return JsonResponse({"error": "No query provided or user not logged in"}, status=400)
-
-            response = process_query(query, user_id)
-            return JsonResponse({"response": response}, status=200)
-
-        except json.JSONDecodeError:
-            return JsonResponse({"error": "Invalid JSON in request"}, status=400)
-        except Exception as e:
-            return JsonResponse({"error": str(e)}, status=500)
-
-    return JsonResponse({"error": "Only POST requests are allowed"}, status=405)
+    """Handle chat requests with proper transfer/balance distinction"""
+    try:
+        query = request.data.get('query', '').strip()
+        if not query:
+            return Response({"error": "Empty query"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        processor = SyncQueryProcessor()
+        response = processor.process_query(request.user, query)
+        
+        return Response({"response": response})
+        
+    except Exception as e:
+        logger.error(f"Chat error: {str(e)}", exc_info=True)
+        return Response(
+            {"error": "Service temporarily unavailable"},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
