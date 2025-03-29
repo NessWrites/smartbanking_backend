@@ -10,7 +10,9 @@ from django.contrib.auth.models import AbstractBaseUser,User, BaseUserManager, P
 from django.db import models
 import statistics
 from datetime import date, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
+from django.utils import timezone
+
 
 # Custom User Manager
 class UserManager(BaseUserManager):
@@ -45,12 +47,18 @@ class Admin(models.Model):
 #4 Loans Model
 class Loans(models.Model):
     loanID = models.AutoField(primary_key=True)
-    loanTypes = models.CharField(max_length=100)
-    interestRates = models.DecimalField(max_digits=5, decimal_places=2)
-    #userID = models.ForeignKey(User, on_delete=models.CASCADE)
+    loanType = models.CharField(max_length=100)
+    description = models.TextField(blank=True, null=True)
+    interestRate = models.DecimalField(max_digits=5, decimal_places=2)
+    minAmount = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    maxAmount = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    minTerm = models.IntegerField(blank=True, null=True)
+    maxTerm = models.IntegerField(blank=True, null=True)
+    createdAt = models.DateTimeField(auto_now_add=True, blank=True, null=True)  # Allow NULL values
 
     def __str__(self):
-        return f"{self.loanTypes} ({self.interestRates}%)"
+        return f"{self.loanType} ({self.interestRate}%)"
+
 
 
 #3 AccountType Model

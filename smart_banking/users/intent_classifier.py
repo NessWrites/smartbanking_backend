@@ -50,6 +50,7 @@ class QueryClassifier:
             - "my balance", "check my balance", "current balance"
             - "my transactions", "transaction history"
             - "my loan details", "loan status"
+            -"types of loan"
             - "account statement"
             
             STEPS - For procedural/how-to questions:
@@ -61,105 +62,108 @@ class QueryClassifier:
             - "calculate interest on 5000", "compute EMI for 10000"
             - "convert 200 USD to NPR", "what's 5% of 10000"
             
+            Also identify if the query is about:
+            - loan products (types of loans available)
+            - specific loan terms (interest rates, amounts, etc.)
             Respond with ONLY the classification word: direct, steps, or calculations
             
             Query: {query}
             Classification:
         """)
+
+    def _initialize_patterns(self):
+        """Initialize pre-compiled regex patterns"""
+        # Steps patterns (checked first)
+        self.steps_patterns = [
+            re.compile(r'how to', re.IGNORECASE),
+            re.compile(r'steps to', re.IGNORECASE),
+            re.compile(r'way to', re.IGNORECASE),
+            re.compile(r'process (to|for)', re.IGNORECASE),
+            re.compile(r'what (do|should) i do to', re.IGNORECASE)
+        ]
         
+        # Direct patterns
+        self.direct_patterns = [
+            re.compile(r'\b(my|check|view|show)\s+(balance|transactions?|loans?)\b', re.IGNORECASE),
+            re.compile(r'\b(account\s+statement|loan\s+status)\b', re.IGNORECASE),
+            re.compile(r'\b(send|transfer)\s+money\b', re.IGNORECASE)
+        ]
+        
+        # Calculation patterns
+        self.calc_patterns = [
+            re.compile(r'calculat(e|ion)', re.IGNORECASE),
+            re.compile(r'comput(e|ation)', re.IGNORECASE),
+            re.compile(r'convert', re.IGNORECASE),
+            re.compile(r'\d+\s*%\s+of\s+\d+', re.IGNORECASE),
+            re.compile(r'emi', re.IGNORECASE)
+        ]
+    
+
     def classify(self, query: str) -> QueryType:
-        """Classify query with precise distinction between direct and steps"""
+        """Classify query with robust error handling"""
         try:
-            # First try precise pattern matching
-            query_type = self._precise_pattern_match(query)
+            # First try pattern matching
+            query_type = self._pattern_match(query)
+            print("I want to check pattern match from classify function", query, query_type)
             if query_type:
                 return query_type
                 
-            # Fall back to general pattern matching
-            query_type = self._general_pattern_match(query)
-            if query_type:
-                return query_type
-                
-            # Finally use LLM classification if patterns don't match
+            # Fall back to LLM if patterns don't match
             return self._llm_classify(query)
             
         except Exception as e:
-            logger.error(f"Classification failed: {str(e)}")
-            return QueryType.STEPS
+            logger.error(f"Classification error: {str(e)}")
+            return QueryType.STEPS  # Default fallback
     
-    def _precise_pattern_match(self, query: str) -> Optional[QueryType]:
-        """Precise pattern matching for clear cases"""
-        query_lower = query.lower().strip()
-        
-        # Explicit STEPS patterns (must come first)
-        steps_phrases = [
-            'how to', 'steps to', 'way to', 'process to',
-            'procedure for', 'guide me', 'show me how',
-            'tell me how', 'explain how', 'walk me through',
-            'what do i do to', 'what should i do to'
-        ]
-        if any(phrase in query_lower for phrase in steps_phrases):
-            return QueryType.STEPS
+    def _pattern_match(self, query: str) -> Optional[QueryType]:
+        """Safe pattern matching with pre-compiled regex"""
+        try:
+            # Check steps patterns first
+            if any(pattern.search(query) for pattern in self.steps_patterns):
+                return QueryType.STEPS
+                
+            # Then check direct patterns
+            if any(pattern.search(query) for pattern in self.direct_patterns):
+                return QueryType.DIRECT
+                
+            # Finally check calculation patterns
+            if any(pattern.search(query) for pattern in self.calc_patterns):
+                return QueryType.CALCULATIONS
+                
+            return "steps"
             
-        # Explicit DIRECT patterns
-        direct_phrases = [
-            'my balance', 'check balance', 'current balance',
-            'my transactions', 'transaction history',
-            'my loan', 'loan details', 'loan status',
-            'account statement', 'send money', 'transfer money',
-            'what is my balance', 'show my balance',
-            'view my balance', 'check my account'
-        ]
-        if any(phrase in query_lower for phrase in direct_phrases):
-            return QueryType.DIRECT
-            
-        return None
-    
-    def _general_pattern_match(self, query: str) -> Optional[QueryType]:
-        """General pattern matching for less clear cases"""
-        query_lower = query.lower()
-        
-        # Calculation patterns
-        if (re.search(r"\b(calculate|compute|convert|emi|interest)\b", query_lower) or
-            re.search(r"\b\d+\s*%\s+of\s+\d+\b", query_lower)):
-            return QueryType.CALCULATIONS
-            
-        # Steps patterns (weaker signals)
-        if (re.search(r"\b(how|steps|process)\s+to\b", query_lower) or
-            re.search(r"\b(what('s| is)\s+needed\b", query_lower)):
-            return QueryType.STEPS
-            
-        # Direct patterns (weaker signals)
-        if (re.search(r"\b(my|check|view|show)\s+(balance|transactions?|loans?)\b", query_lower) or
-            re.search(r"\b(account\s+statement|loan\s+status)\b", query_lower)):
-            return QueryType.DIRECT
-            
-        return None
+        except Exception as e:
+            logger.warning(f"Pattern matching error: {str(e)}")
+            return None
     
     def _llm_classify(self, query: str) -> QueryType:
-        """Use LLM for ambiguous cases"""
+        """Safe LLM classification with fallback"""
         try:
             chain = self.classifier_prompt | self.llm | StrOutputParser()
             raw_output = chain.invoke({"query": query})
             clean_output = self._clean_output(raw_output)
             return QueryType(clean_output)
-        except:
-            return QueryType.STEPS  # Default fallback
+        except Exception as e:
+            logger.warning(f"LLM classification failed: {str(e)}")
+            return QueryType.STEPS
     
     def _clean_output(self, raw: str) -> str:
-        """Normalize classifier output"""
-        clean = raw.strip().lower()
-        clean = re.sub(r"[^a-z]", "", clean)  # Remove non-alphabetic chars
-        
-        # Handle variations
-        if clean.startswith(("dir", "dat", "inf")):
-            return "direct"
-        if clean.startswith(("step", "proc", "how")):
-            return "steps"
-        if clean.startswith(("calc", "comp", "math")):
-            return "calculations"
+        """Robust output cleaning"""
+        try:
+            clean = raw.strip().lower()
+            clean = re.sub(r'[^a-z]', '', clean.split()[0])  # Take first word
             
-        return "steps"  # Default fallback
+            if clean.startswith(('dir', 'dat')):
+                return 'direct'
+            if clean.startswith(('ste', 'how', 'proc')):
+                return 'steps'
+            if clean.startswith(('cal', 'com', 'mat')):
+                return 'calculations'
+                
+            return 'steps'  # Default fallback
+        except:
+            return 'steps'
+
 
 class BankingAssistant:
     def __init__(self, llm: LlamaCpp, user_id: int = None, max_history: int = 10):
@@ -176,9 +180,19 @@ class BankingAssistant:
     def _initialize_tools(self) -> list:
         return [
             Tool(
-                name="AccountLookup",
+                name="AccountInformation",
                 func=self._fetch_from_database,
-                description="Useful for account balance, transactions, and loan details"
+                description = (
+                    "Useful for account balance, transactions, and loan details and other product information including:"
+                    "- Account balances and transactions "
+                    "- Loan details and status "
+                    "- Available loan products and their terms "
+                    "- Interest rates and eligibility criteria "
+                    "Example queries: "
+                    "'what types of loans do you offer' "
+                    "'what's the interest rate for home loans' "
+                    "'minimum amount for business loan'" 
+                    )
             ),
             Tool(
                 name="FinancialCalculator",
@@ -238,6 +252,20 @@ class BankingAssistant:
                 
             elif "loan" in query_lower:
                 try:
+                    # Check if query is about available loan products
+                    if any(phrase in query_lower for phrase in ['types of loan', 'loan types', 
+                                                          'what loans', 'available loans']):
+                        return self._get_all_loan_types()
+
+                    # Check if query is about specific loan product details
+                    if any(phrase in query_lower for phrase in ['interest rate of', 'minimum amount for',
+                                                              'details about', 'terms for']):
+                        return self._get_specific_loan_details(query)
+
+
+                    
+                    
+                    
                     return self._get_loan_details(account)
                 except Exception as e:
                     logger.error(f"Loan details error: {str(e)}")
@@ -252,6 +280,63 @@ class BankingAssistant:
             logger.error(f"Database access error: {str(e)}")
             return "Unable to fetch data at this time."
         
+
+    def _get_all_loan_types(self) -> str:
+        """Retrieve all available loan types"""
+        loans = Loans.objects.all()
+        print("I did came in get all types of loan")
+        if not loans.exists():
+            return "No loan products currently available."
+        
+        loan_list = "\n".join(
+            f"{loan.loanType} ({loan.interestRate}% interest)" 
+            for loan in loans
+        )
+        return f"Available loan types:\n{loan_list}\n\nAsk about specific loans for more details."
+    
+    def _get_specific_loan_details(self, query: str) -> str:
+        """Get details for a specific loan type"""
+        # Extract loan type from query
+        loans = Loans.objects.all()
+        target_loan = None
+
+        for loan in loans:
+            all_names = [loan.loanType.lower()] 
+            if loan.common_names:
+                all_names.extend([name.strip().lower() for name in loan.common_names.split(',')])
+                
+            if any(name in query.lower() for name in all_names):
+                target_loan = loan
+                break
+
+        loan_types = [loan.loanType for loan in Loans.objects.all()]
+        target_loan = next(
+            (loan for loan in loan_types if loan.lower() in query.lower()),
+            None
+        )
+        
+        
+        if not target_loan:
+            return "Could not identify the loan type. Please try again."
+        
+        try:
+            loan = Loans.objects.get(loanType__iexact=target_loan)
+            return (
+                f"{loan.loanType} Details:\n"
+                f"Description: {loan.description}\n"
+                f"Interest Rate: {loan.interestRate}%\n"
+                f"Minimum Amount: NPR {loan.minAmount:,.2f}\n"
+                f"Maximum Amount: NPR {loan.maxAmount:,.2f}\n"
+                f"Minimum Term: {loan.minTerm} months\n"
+                f"Maximum Term: {loan.maxTerm} months"
+            )
+        except Loans.DoesNotExist:
+            return f"Could not find details for {target_loan}."
+    
+    
+    
+
+
     def _format_transactions(self, transactions) -> str:
         """Format transaction data for response"""
         if not transactions.exists():
