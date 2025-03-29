@@ -161,3 +161,6 @@ STATIC_URL = "static/"
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# settings.py
+LLM_MODEL_PATH = "/Users/ness/Islington/unsloth.Q4_K_M.gguf"

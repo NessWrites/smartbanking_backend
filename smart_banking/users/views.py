@@ -2,10 +2,12 @@
 import json
 from decimal import Decimal, InvalidOperation
 import re
+
+from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from .query_processor import QueryProcessor
+#from .query_processor import QueryProcessor
 
 # Django Imports
 from django.core.exceptions import ValidationError
@@ -13,6 +15,9 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils.dateparse import parse_date
 from django.views.decorators.csrf import csrf_exempt
+
+from .intent_classifier import BankingAssistant
+from .model_manager import ModelManager
 
 # Django REST Framework Imports
 from rest_framework import status
@@ -38,6 +43,8 @@ from langchain.prompts import PromptTemplate
 from llama_cpp import Llama
 import torch
 #from langchain_core.runnables import Runnable 
+# Initialize once at app startup (in apps.py or similar)
+ModelManager.get_instance(settings.LLM_MODEL_PATH)
 
 # Local Imports
 from .models import User, AccountType, Transactions, TransactionType, Account, Withdraw
@@ -419,20 +426,58 @@ def is_authenticated(user_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def chat(request):
-    """Handle chat requests with proper transfer/balance distinction"""
     try:
+        # Get authenticated user and LLM
+        llm = ModelManager.get_llm()
+        
+        # Process query
         query = request.data.get('query', '').strip()
         if not query:
-            return Response({"error": "Empty query"}, status=status.HTTP_400_BAD_REQUEST)
-            
-        processor = SyncQueryProcessor()
-        response = processor.process_query(request.user, query)
+            return Response({"error": "Query is required"}, status=400)
         
-        return Response({"response": response})
+        assistant = BankingAssistant(llm=llm, user_id=request.user.id)
+        response = assistant.process_query(query)
+        
+        return Response({
+            "response": response.response,
+            "type": response.type.value,
+            "confidence": response.confidence
+        })
         
     except Exception as e:
         logger.error(f"Chat error: {str(e)}", exc_info=True)
-        return Response(
-            {"error": "Service temporarily unavailable"},
-            status=status.HTTP_503_SERVICE_UNAVAILABLE
-        )
+        return Response({"error": "Internal server error"}, status=500)
+# @api_view(['POST'])
+# @permission_classes([IsAuthenticated])
+# def chat(request):
+#     """Handle chat requests"""
+#     try:
+#         query = request.data.get('query', '').strip()
+#         if not query:
+#             return Response({"error": "Empty query"}, status=status.HTTP_400_BAD_REQUEST)
+        
+#         # Temporary test code - remove after testing
+#         if query == "__test_intent__":
+#             processor = SyncQueryProcessor()
+#             test_response = processor.process_query(
+#                 request.user,
+#                 "how do I activate my card for international use?"
+#             )
+#             return Response({
+#                 "test_output": test_response,
+#                 "expected_category": "CARD",
+#                 "expected_intent": "activate_card_international_usage"
+#             })
+#         # End temporary code
+            
+#         processor = SyncQueryProcessor()
+#         response = processor.process_query(request.user, query)
+        
+#         return Response({"response": response})
+        
+#     except Exception as e:
+#         logger.error(f"Chat error: {str(e)}", exc_info=True)
+#         return Response(
+#             {"error": "Service temporarily unavailable"},
+#             status=status.HTTP_503_SERVICE_UNAVAILABLE
+#         )
