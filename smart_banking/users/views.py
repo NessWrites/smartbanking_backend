@@ -447,37 +447,4 @@ def chat(request):
     except Exception as e:
         logger.error(f"Chat error: {str(e)}", exc_info=True)
         return Response({"error": "Internal server error"}, status=500)
-# @api_view(['POST'])
-# @permission_classes([IsAuthenticated])
-# def chat(request):
-#     """Handle chat requests"""
-#     try:
-#         query = request.data.get('query', '').strip()
-#         if not query:
-#             return Response({"error": "Empty query"}, status=status.HTTP_400_BAD_REQUEST)
-        
-#         # Temporary test code - remove after testing
-#         if query == "__test_intent__":
-#             processor = SyncQueryProcessor()
-#             test_response = processor.process_query(
-#                 request.user,
-#                 "how do I activate my card for international use?"
-#             )
-#             return Response({
-#                 "test_output": test_response,
-#                 "expected_category": "CARD",
-#                 "expected_intent": "activate_card_international_usage"
-#             })
-#         # End temporary code
-            
-#         processor = SyncQueryProcessor()
-#         response = processor.process_query(request.user, query)
-        
-#         return Response({"response": response})
-        
-#     except Exception as e:
-#         logger.error(f"Chat error: {str(e)}", exc_info=True)
-#         return Response(
-#             {"error": "Service temporarily unavailable"},
-#             status=status.HTTP_503_SERVICE_UNAVAILABLE
-#         )
+    
