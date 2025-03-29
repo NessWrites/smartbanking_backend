@@ -23,3 +23,5 @@ detector/
 config.py
 class_test.ipynb
 extract_test.ipynb
+intent_test.ipynb
+llmchain_test.ipynb
