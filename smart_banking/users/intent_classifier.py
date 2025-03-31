@@ -1,11 +1,10 @@
 import re
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from enum import Enum
 from langchain_community.llms import LlamaCpp
 from langchain_core.tools import Tool
 from langchain.agents import initialize_agent, AgentType
-from langchain.memory import ChatMessageHistory
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
@@ -13,7 +12,10 @@ from pydantic import BaseModel, validator
 from django.db.models import Q
 from .models import Account, Loans, Transactions
 from .serializers import AccountSerializer, LoansSerializer, TransactionsSerializer
-from langchain.memory import ConversationBufferMemory
+import re
+from langchain.memory import ConversationBufferMemory, ChatMessageHistory
+from langchain.schema import BaseMessage
+
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ class BankingResponse(BaseModel):
     response: str
     confidence: float = 1.0
     source: Optional[str] = None
+    context: Optional[dict] = None  # Added context field
     
     @validator('confidence')
     def validate_confidence(cls, v):
@@ -40,6 +43,7 @@ class QueryClassifier:
     def __init__(self, llm: LlamaCpp):
         self.llm = llm
         self._initialize_prompts()
+        self._initialize_patterns()
         
     def _initialize_prompts(self):
         """Initialize classification prompts"""
@@ -50,8 +54,10 @@ class QueryClassifier:
             - "my balance", "check my balance", "current balance"
             - "my transactions", "transaction history"
             - "my loan details", "loan status"
-            -"types of loan"
+            - "types of loan", "what loans do you offer"
             - "account statement"
+            - "tell me more about [loan type]"
+            - "details about [loan type]"
             
             STEPS - For procedural/how-to questions:
             - "how to check balance", "steps to view transactions"
@@ -86,7 +92,10 @@ class QueryClassifier:
         self.direct_patterns = [
             re.compile(r'\b(my|check|view|show)\s+(balance|transactions?|loans?)\b', re.IGNORECASE),
             re.compile(r'\b(account\s+statement|loan\s+status)\b', re.IGNORECASE),
-            re.compile(r'\b(send|transfer)\s+money\b', re.IGNORECASE)
+            re.compile(r'\b(send|transfer)\s+money\b', re.IGNORECASE),
+            re.compile(r'\btypes?\s+of\s+loans?\b', re.IGNORECASE),
+            re.compile(r'\btell\s+me\s+more\s+about\b', re.IGNORECASE),
+            re.compile(r'\bdetails?\s+about\b', re.IGNORECASE)
         ]
         
         # Calculation patterns
@@ -97,14 +106,28 @@ class QueryClassifier:
             re.compile(r'\d+\s*%\s+of\s+\d+', re.IGNORECASE),
             re.compile(r'emi', re.IGNORECASE)
         ]
-    
+        
+        # Add OFF_TOPIC patterns
+        self.off_topic_patterns = [
+        re.compile(r'\b(trump|biden|politics|sports|weather|movie)\b', re.IGNORECASE),
+        re.compile(r'^who (is|are)', re.IGNORECASE),
+        re.compile(r'^what is', re.IGNORECASE)
+        ]
+    def _is_banking_related(self, query: str) -> bool:
+        banking_keywords = [
+            'balance', 'account', 'loan', 'transaction', 'interest', 'emi', 
+            'transfer', 'money', 'currency', 'bank', 'deposit', 'payment', 'withdrawls', 'foreign exchange', 'currency'
+        ]
+        return any(keyword in query.lower() for keyword in banking_keywords)
+
 
     def classify(self, query: str) -> QueryType:
         """Classify query with robust error handling"""
+        if not self._is_banking_related(query):
+            raise ValueError("This query is not related to banking.")
         try:
             # First try pattern matching
             query_type = self._pattern_match(query)
-            print("I want to check pattern match from classify function", query, query_type)
             if query_type:
                 return query_type
                 
@@ -130,7 +153,7 @@ class QueryClassifier:
             if any(pattern.search(query) for pattern in self.calc_patterns):
                 return QueryType.CALCULATIONS
                 
-            return "steps"
+            return None
             
         except Exception as e:
             logger.warning(f"Pattern matching error: {str(e)}")
@@ -164,6 +187,122 @@ class QueryClassifier:
         except:
             return 'steps'
 
+class ContextAwareBankingAssistant:
+    def __init__(self, llm: LlamaCpp, user_id: int = None, max_history: int = 10):
+        self.llm = llm
+        self.user_id = user_id
+        self.max_history = max_history
+        self.message_history = ChatMessageHistory()
+        self.conversation_context = {
+            'last_topics': [],
+            'current_focus': None,
+            'pending_actions': []
+        }
+        
+    def _analyze_conversation_context(self) -> Dict:
+        """Analyze the entire conversation history to extract context"""
+        context = {
+            'mentioned_products': [],
+            'ongoing_requests': [],
+            'user_preferences': {}
+        }
+        
+        # Analyze last 5 messages for context
+        recent_messages = [msg.content for msg in self.message_history.messages[-5:]]
+        
+        # Detect mentioned banking products
+        banking_products = ['loan', 'account', 'card', 'deposit', 'investment']
+        for product in banking_products:
+            if any(product in msg.lower() for msg in recent_messages):
+                context['mentioned_products'].append(product)
+        
+        # Detect ongoing requests
+        question_words = ['how', 'what', 'when', 'where', 'why']
+        if any(msg.endswith('?') for msg in recent_messages):
+            context['ongoing_requests'] = recent_messages[-1]  # Last question
+        
+        return context
+
+    def _generate_contextual_response(self, query: str) -> str:
+        """Generate response using full conversation context"""
+        current_context = self._analyze_conversation_context()
+        
+        # Prepare context prompt
+        context_prompt = f"""
+        Conversation Context:
+        - Recent Topics: {', '.join(current_context['mentioned_products'])}
+        - Ongoing Requests: {current_context['ongoing_requests']}
+        
+        Current Query: {query}
+        
+        Instructions:
+        1. Maintain natural conversation flow
+        2. Reference previous topics when relevant
+        3. If this is a follow-up question, answer accordingly
+        4. Be concise but helpful
+        """
+        
+        # Get base response from appropriate tool
+        base_response = self._route_to_tool(query)
+        
+        # Enhance with contextual understanding
+        enhanced_prompt = f"""
+        {context_prompt}
+        
+        Base Response: {base_response}
+        
+        Enhance this response to be more contextual and natural:
+        """
+        
+        return self.llm.invoke(enhanced_prompt)
+
+    def _route_to_tool(self, query: str) -> str:
+        """Route query to appropriate tool with context awareness"""
+        context = self._analyze_conversation_context()
+        
+        # Check if this is a follow-up to previous question
+        if context['ongoing_requests']:
+            last_question = context['ongoing_requests'][-1]
+            if self._is_follow_up(query, last_question):
+                return self._handle_follow_up(query, last_question)
+        
+        # Normal routing logic
+        query_type = self.classifier.classify(query)
+        
+        if query_type == QueryType.DIRECT:
+            return self._fetch_from_database(query)
+        elif query_type == QueryType.STEPS:
+            return self._generate_steps_response(query)
+        else:
+            return self.agent.invoke({"input": query})["output"]
+
+    def _is_follow_up(self, current_query: str, previous_query: str) -> bool:
+        """Determine if current query is a follow-up to previous"""
+        follow_up_phrases = [
+            'what about', 'and', 'also', 'more about', 
+            'tell me more', 'explain', 'details',
+            'how about', 'what if', 'can i'
+        ]
+        return any(phrase in current_query.lower() for phrase in follow_up_phrases)
+
+    def _handle_follow_up(self, current_query: str, previous_query: str) -> str:
+        """Handle follow-up questions with context"""
+        # Get original response
+        original_response = self._route_to_tool(previous_query)
+        
+        # Generate contextual follow-up
+        prompt = f"""
+        Original Question: {previous_query}
+        Original Response: {original_response}
+        
+        Follow-up Question: {current_query}
+        
+        Provide a detailed, contextual answer that builds on the original response:
+        """
+        
+        return self.llm.invoke(prompt)
+
+
 
 class BankingAssistant:
     def __init__(self, llm: LlamaCpp, user_id: int = None, max_history: int = 10):
@@ -171,6 +310,7 @@ class BankingAssistant:
         self.user_id = user_id
         self.max_history = max_history
         self.message_history = ChatMessageHistory()
+        self.context = {}  # Track conversation context
         
         # Initialize components
         self.classifier = QueryClassifier(llm)
@@ -182,7 +322,7 @@ class BankingAssistant:
             Tool(
                 name="AccountInformation",
                 func=self._fetch_from_database,
-                description = (
+                description=(
                     "Useful for account balance, transactions, and loan details and other product information including:"
                     "- Account balances and transactions "
                     "- Loan details and status "
@@ -191,8 +331,9 @@ class BankingAssistant:
                     "Example queries: "
                     "'what types of loans do you offer' "
                     "'what's the interest rate for home loans' "
-                    "'minimum amount for business loan'" 
-                    )
+                    "'minimum amount for business loan' "
+                    "'tell me more about personal loans'"
+                )
             ),
             Tool(
                 name="FinancialCalculator",
@@ -233,7 +374,6 @@ class BankingAssistant:
             
             if "balance" in query_lower:
                 try:
-                    # Ensure balance is converted to float before formatting
                     balance = float(AccountSerializer(account).data['balance'])
                     return f"Current balance: NPR {balance:,.2f}"
                 except (ValueError, TypeError, KeyError) as e:
@@ -259,13 +399,13 @@ class BankingAssistant:
 
                     # Check if query is about specific loan product details
                     if any(phrase in query_lower for phrase in ['interest rate of', 'minimum amount for',
-                                                              'details about', 'terms for']):
+                                                              'details about', 'terms for', 'tell me more about']):
                         return self._get_specific_loan_details(query)
 
+                    # Check if this is a follow-up about a previously mentioned loan
+                    if 'previous_loan_type' in self.context:
+                        return self._get_specific_loan_details(f"details about {self.context['previous_loan_type']}")
 
-                    
-                    
-                    
                     return self._get_loan_details(account)
                 except Exception as e:
                     logger.error(f"Loan details error: {str(e)}")
@@ -280,11 +420,9 @@ class BankingAssistant:
             logger.error(f"Database access error: {str(e)}")
             return "Unable to fetch data at this time."
         
-
     def _get_all_loan_types(self) -> str:
         """Retrieve all available loan types"""
         loans = Loans.objects.all()
-        print("I did came in get all types of loan")
         if not loans.exists():
             return "No loan products currently available."
         
@@ -292,35 +430,44 @@ class BankingAssistant:
             f"{loan.loanType} ({loan.interestRate}% interest)" 
             for loan in loans
         )
+        
+        # Store context that we just showed loan types
+        self.context['last_action'] = 'listed_loan_types'
         return f"Available loan types:\n{loan_list}\n\nAsk about specific loans for more details."
     
     def _get_specific_loan_details(self, query: str) -> str:
         """Get details for a specific loan type"""
-        # Extract loan type from query
+
         loans = Loans.objects.all()
         target_loan = None
 
+        # First try to match against loan types and their common names
         for loan in loans:
-            all_names = [loan.loanType.lower()] 
+            all_names = [loan.loanType.lower()]
             if loan.common_names:
                 all_names.extend([name.strip().lower() for name in loan.common_names.split(',')])
                 
             if any(name in query.lower() for name in all_names):
-                target_loan = loan
+                target_loan = loan.loanType
                 break
 
-        loan_types = [loan.loanType for loan in Loans.objects.all()]
-        target_loan = next(
-            (loan for loan in loan_types if loan.lower() in query.lower()),
-            None
-        )
-        
-        
+        # If no match found, check if this is a follow-up after listing loans
+        if not target_loan and 'last_action' in self.context and self.context['last_action'] == 'listed_loan_types':
+            # Try to extract loan type from query assuming it's a follow-up
+            for loan in loans:
+                if loan.loanType.lower() in query.lower():
+                    target_loan = loan.loanType
+                    break
+
         if not target_loan:
-            return "Could not identify the loan type. Please try again."
-        
+            return "Could not identify the loan type. Please specify which loan you're interested in."
+
         try:
             loan = Loans.objects.get(loanType__iexact=target_loan)
+            # Store the loan type in context for potential follow-up questions
+            self.context['previous_loan_type'] = loan.loanType
+            self.context['last_action'] = 'provided_loan_details'
+            
             return (
                 f"{loan.loanType} Details:\n"
                 f"Description: {loan.description}\n"
@@ -328,15 +475,12 @@ class BankingAssistant:
                 f"Minimum Amount: NPR {loan.minAmount:,.2f}\n"
                 f"Maximum Amount: NPR {loan.maxAmount:,.2f}\n"
                 f"Minimum Term: {loan.minTerm} months\n"
-                f"Maximum Term: {loan.maxTerm} months"
+                f"Maximum Term: {loan.maxTerm} months\n\n"
+                f"Would you like to know about the application process for this loan?"
             )
         except Loans.DoesNotExist:
             return f"Could not find details for {target_loan}."
     
-    
-    
-
-
     def _format_transactions(self, transactions) -> str:
         """Format transaction data for response"""
         if not transactions.exists():
@@ -357,7 +501,6 @@ class BankingAssistant:
             loan = Loans.objects.get(pk=account.loanID.pk)
             data = LoansSerializer(loan).data
             
-            # Ensure all values are properly formatted
             loan_amount = float(data.get('loanAmount', 0))
             outstanding = float(data.get('outstandingAmount', 0))
             rate = float(data.get('interestRate', 0))
@@ -456,53 +599,56 @@ class BankingAssistant:
         return self.llm.invoke(prompt)
     
     def process_query(self, query: str) -> BankingResponse:
-        """Process query with classification-based routing"""
         try:
-            if not query.strip():
-                return BankingResponse(
-                    query="",
-                    type=QueryType.STEPS,
-                    response="Please enter a valid query",
-                    confidence=0.1
-                )
-            
-            # Classify query
             query_type = self.classifier.classify(query)
             logger.debug(f"Classified '{query}' as {query_type}")
-            
-            # Route based on type
             if query_type == QueryType.DIRECT:
                 response = self._fetch_from_database(query)
             elif query_type == QueryType.STEPS:
                 response = self._generate_steps_response(query)
             else:
                 response = self.agent.invoke({"input": query})["output"]
-            
-            # Update chat history
             self._update_chat_history(query, response)
-            
-            return BankingResponse(
-                query=query,
-                type=query_type,
-                response=response,
-                confidence=0.9
-            )
-            
-        except Exception as e:
-            logger.error(f"Processing error: {str(e)}", exc_info=True)
+            return BankingResponse(query=query, type=query_type, response=response, confidence=0.9, context=self.context.copy())
+        except ValueError as ve:
             return BankingResponse(
                 query=query,
                 type=QueryType.STEPS,
-                response="I couldn't process your request. Please try again.",
-                confidence=0.1
+                response="I'm a banking assistant and can only help with banking-related questions. How can I assist you with your banking needs?",
+                confidence=0.9
             )
+        except Exception as e:
+            logger.error(f"Processing error: {str(e)}", exc_info=True)
+            return BankingResponse(query=query, type=QueryType.STEPS, response="I couldn't process your request.", confidence=0.1)
         
     def _update_chat_history(self, query: str, response: str):
-        """Maintain conversation history"""
+        """Maintain conversation history and update context"""
         self.message_history.add_messages([
             HumanMessage(content=query),
             AIMessage(content=response)
         ])
+        
         # Trim history if needed
         if len(self.message_history.messages) > self.max_history:
             self.message_history.messages = self.message_history.messages[-self.max_history:]
+            
+        # Update context based on the conversation
+        self._update_conversation_context(query, response)
+    
+    def _update_conversation_context(self, query: str, response: str):
+        """Update the conversation context based on the current exchange"""
+        query_lower = query.lower()
+        response_lower = response.lower()
+        
+        # Detect if we just listed loan types
+        if 'available loan types:' in response:
+            self.context['last_action'] = 'listed_loan_types'
+        
+        # Detect if user is asking about a specific loan type
+        elif any(phrase in query_lower for phrase in ['tell me more about', 'details about']):
+            # Try to extract the loan type from the query
+            for loan in Loans.objects.all():
+                if loan.loanType.lower() in query_lower:
+                    self.context['previous_loan_type'] = loan.loanType
+                    self.context['last_action'] = 'asked_about_loan'
+                    break
