@@ -369,8 +369,8 @@ class BankingAssistant:
             return "Please log in to access your account information."
         
         try:
-            account = Account.objects.get(user__id=self.user_id)
             query_lower = query.lower()
+            account = Account.objects.get(user__id=self.user_id)
             
             if "balance" in query_lower:
                 try:
@@ -379,7 +379,7 @@ class BankingAssistant:
                 except (ValueError, TypeError, KeyError) as e:
                     logger.error(f"Balance formatting error: {str(e)}")
                     return "Could not retrieve balance information."
-                
+            
             elif "transaction" in query_lower:
                 try:
                     transactions = Transactions.objects.filter(
@@ -389,37 +389,31 @@ class BankingAssistant:
                 except Exception as e:
                     logger.error(f"Transaction fetch error: {str(e)}")
                     return "Could not retrieve transaction history."
-                
-            elif "loan" in query_lower:
-                try:
-                    # Check if query is about available loan products
-                    if any(phrase in query_lower for phrase in ['types of loan', 'loan types', 
-                                                          'what loans', 'available loans']):
-                        return self._get_all_loan_types()
-
-                    # Check if query is about specific loan product details
-                    if any(phrase in query_lower for phrase in ['interest rate of', 'minimum amount for',
-                                                              'details about', 'terms for', 'tell me more about']):
-                        return self._get_specific_loan_details(query)
-
-                    # Check if this is a follow-up about a previously mentioned loan
-                    if 'previous_loan_type' in self.context:
-                        return self._get_specific_loan_details(f"details about {self.context['previous_loan_type']}")
-
-                    return self._get_loan_details(account)
-                except Exception as e:
-                    logger.error(f"Loan details error: {str(e)}")
-                    return "Could not retrieve loan information."
-                
-            return "I couldn't find that information. Please try being more specific."
             
+            elif "loan" in query_lower:
+                # User-specific loan details
+                if any(phrase in query_lower for phrase in ["my", "mine", "status", "details"]):
+                    print("user_loan details")
+                    return self._get_loan_details(account)
+                
+                # General loan queries (types or specific details)
+                if any(phrase in query_lower for phrase in ['types of loan', 'loan types', 
+                                                            'what loans', 'available loans', 'loan services']):
+                    print("Types of loan")
+                    return self._get_all_loan_types()
+                
+                # Specific loan details (e.g., "minimum amount for personal loan")
+                return self._get_specific_loan_details(query)
+            
+            return "I couldn't find that information. Please try being more specific."
+        
         except Account.DoesNotExist:
             logger.error("Account not found for user")
             return "Account not found. Please contact support."
         except Exception as e:
             logger.error(f"Database access error: {str(e)}")
             return "Unable to fetch data at this time."
-        
+            
     def _get_all_loan_types(self) -> str:
         """Retrieve all available loan types"""
         loans = Loans.objects.all()
@@ -436,48 +430,73 @@ class BankingAssistant:
         return f"Available loan types:\n{loan_list}\n\nAsk about specific loans for more details."
     
     def _get_specific_loan_details(self, query: str) -> str:
-        """Get details for a specific loan type"""
-
+        """Get details for a specific loan type, answering the specific question asked"""
+        query_lower = query.lower()
         loans = Loans.objects.all()
         target_loan = None
-
-        # First try to match against loan types and their common names
+    
+        # Identify the loan type
         for loan in loans:
             all_names = [loan.loanType.lower()]
             if loan.common_names:
                 all_names.extend([name.strip().lower() for name in loan.common_names.split(',')])
-                
-            if any(name in query.lower() for name in all_names):
+            if any(name in query_lower for name in all_names):
                 target_loan = loan.loanType
                 break
-
-        # If no match found, check if this is a follow-up after listing loans
+    
+        # Check if this is a follow-up after listing loans
         if not target_loan and 'last_action' in self.context and self.context['last_action'] == 'listed_loan_types':
-            # Try to extract loan type from query assuming it's a follow-up
             for loan in loans:
-                if loan.loanType.lower() in query.lower():
+                if loan.loanType.lower() in query_lower:
                     target_loan = loan.loanType
                     break
-
+    
         if not target_loan:
             return "Could not identify the loan type. Please specify which loan you're interested in."
-
+    
         try:
             loan = Loans.objects.get(loanType__iexact=target_loan)
-            # Store the loan type in context for potential follow-up questions
             self.context['previous_loan_type'] = loan.loanType
             self.context['last_action'] = 'provided_loan_details'
-            
-            return (
-                f"{loan.loanType} Details:\n"
-                f"Description: {loan.description}\n"
-                f"Interest Rate: {loan.interestRate}%\n"
-                f"Minimum Amount: NPR {loan.minAmount:,.2f}\n"
-                f"Maximum Amount: NPR {loan.maxAmount:,.2f}\n"
-                f"Minimum Term: {loan.minTerm} months\n"
-                f"Maximum Term: {loan.maxTerm} months\n\n"
-                f"Would you like to know about the application process for this loan?"
-            )
+    
+            # Base response
+            response = f"{loan.loanType} Details: "
+    
+            # Answer specific attribute if asked
+            if "minimum" or "min" in query_lower and "amount" or "loan amount" in query_lower:
+                response += f"The minimum amount for {loan.loanType} is NPR {loan.minAmount:,.2f} "
+            elif "maximum" in query_lower and "amount" in query_lower:
+                response += f"The maximum amount for {loan.loanType} is NPR {loan.maxAmount:,.2f} "
+            elif "interest" in query_lower or "rate" in query_lower:
+                response += f"The interest rate for {loan.loanType} is {loan.interestRate}% "
+            elif "term" in query_lower or "duration" in query_lower:
+                if "minimum" in query_lower:
+                    response += f"The minimum term for {loan.loanType} is {loan.minTerm} months "
+                elif "maximum" in query_lower:
+                    response += f"The maximum term for {loan.loanType} is {loan.maxTerm} months "
+                else:
+                    response += f"Terms range from {loan.minTerm} to {loan.maxTerm} months "
+            elif "description" in query_lower or "about" in query_lower:
+                response += f"Description: {loan.description} "
+            else:
+                # Default to full details if no specific attribute is asked
+                response += (
+                    f"Description: {loan.description}\n"
+                    f"Interest Rate: {loan.interestRate}%\n"
+                    f"Minimum Amount: NPR {loan.minAmount:,.2f}\n"
+                    f"Maximum Amount: NPR {loan.maxAmount:,.2f}\n"
+                    f"Minimum Term: {loan.minTerm} months\n"
+                    f"Maximum Term: {loan.maxTerm} months\n"
+                )
+    
+            # Add follow-up prompt unless already full details
+            if not ("description" in query_lower or "about" in query_lower) and not all(attr in query_lower for attr in ["minimum", "maximum", "interest", "term"]):
+                response += f"with an interest rate of {loan.interestRate}%. "
+                response += f"The maximum loan amount is NPR {loan.maxAmount:,.2f}. "
+                response += f"What more would you like to know about {loan.loanType}?"
+    
+            return response.strip()
+    
         except Loans.DoesNotExist:
             return f"Could not find details for {target_loan}."
     
@@ -495,7 +514,7 @@ class BankingAssistant:
     def _get_loan_details(self, account) -> str:
         """Format loan information for response with better error handling"""
         if not account.loanID:
-            return "You don't have any active loans."
+            return "You don't have any active loans. Would you like to know more about loans?"
             
         try:
             loan = Loans.objects.get(pk=account.loanID.pk)
