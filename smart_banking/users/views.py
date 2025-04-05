@@ -43,6 +43,17 @@ from langchain.prompts import PromptTemplate
 #from langchain.embeddings import HuggingFaceEmbeddings
 from llama_cpp import Llama
 import torch
+
+    # users/views.py
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+from django.contrib.auth import get_user_model
+from decimal import Decimal
+
+from django.core.exceptions import ObjectDoesNotExist
+from django.contrib.auth.hashers import make_password
 #from langchain_core.runnables import Runnable 
 # Initialize once at app startup (in apps.py or similar)
 ModelManager.get_instance(settings.LLM_MODEL_PATH)
@@ -476,3 +487,58 @@ class CurrencyConversionView(APIView):
                 'success': False
             }, status=status.HTTP_400_BAD_REQUEST)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+
+
+User = get_user_model()
+
+class ChangePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        # Step 1: Initial request to send OTP
+        if 'send_otp' in request.data:
+            phone_number = request.user.phoneNumber
+            tracker = Tracker()
+            otp_status = tracker.send_otp(phone_number)
+            
+            if otp_status == "pending":
+                return Response({
+                    "message": "OTP sent to your registered phone number.",
+                    "requires_otp": True
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response({"error": "Failed to send OTP."}, 
+                              status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # Step 2: Verify OTP and change password
+        elif 'verify_otp_and_change_password' in request.data:
+            phone_number = request.user.phoneNumber
+            otp_code = request.data.get('otp_code')
+            new_password = request.data.get('new_password')
+            confirm_password = request.data.get('confirm_password')
+
+            # Validate passwords match
+            if new_password != confirm_password:
+                return Response({"error": "Passwords do not match."}, 
+                              status=status.HTTP_400_BAD_REQUEST)
+
+            # Verify OTP
+            tracker = Tracker()
+            if not tracker.verify_otp(phone_number, otp_code):
+                return Response({"error": "Invalid OTP."}, 
+                              status=status.HTTP_400_BAD_REQUEST)
+
+            # Change password
+            try:
+                user = request.user
+                user.password = make_password(new_password)
+                user.save()
+                return Response({"message": "Password changed successfully."}, 
+                              status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({"error": str(e)}, 
+                              status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({"error": "Invalid request."}, 
+                      status=status.HTTP_400_BAD_REQUEST)

@@ -1,5 +1,5 @@
 from django.urls import path, include
-from .views import  CreateUserView, CurrencyConversionView, LoginView, UserInfoView, CheckBalanceView,DepositView,WithdrawView,AccountStatementView, chat
+from .views import  ChangePasswordView, CreateUserView, CurrencyConversionView, LoginView, UserInfoView, CheckBalanceView,DepositView,WithdrawView,AccountStatementView, chat
 #from .views import ChatbotView
 
 # # Define the router for ViewSets
@@ -21,6 +21,7 @@ urlpatterns = [
     path('account-statement', AccountStatementView.as_view(), name='view_transactions'),  # View transactions (requires user auth)
     path('chat', chat, name='chatbot_response'),
     path('convert-currency', CurrencyConversionView.as_view(), name='convert_currency'),
+    path('change-password/', ChangePasswordView.as_view(), name='change-password'),
     #path("chat", ChatbotView.as_view(), name="chatbot"),
 ]
 
