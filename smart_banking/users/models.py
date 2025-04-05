@@ -12,6 +12,8 @@ import statistics
 from datetime import date, timedelta
 from decimal import Decimal
 from django.utils import timezone
+import requests  # Add this line at the top of models.py
+
 
 
 # Custom User Manager
@@ -391,3 +393,76 @@ class Withdraw(models.Model):
 
     def __str__(self):
         return f"Withdraw {self.withdrawID} - {self.withdrawal_type} - {self.transaction.reference}"
+
+class CurrencyExchange:
+    """
+    Handles currency exchange operations using NRB API.
+    """
+    BASE_URL = "https://www.nrb.org.np/api/forex/v1/rates"
+    
+    @classmethod
+    def get_exchange_rate(cls, date, currency):
+        """
+        Fetches exchange rate for the given date and currency from NRB API.
+        Returns buy/sell rates for the currency against NPR.
+        """
+        params = {
+            "from": date,
+            "to": date,
+            "per_page": 50,
+            "page": 1
+        }
+
+        response = requests.get(cls.BASE_URL, params=params)
+        data = response.json()
+
+        if data["status"]["code"] == 200:
+            for rate_info in data["data"]["payload"]:
+                for rate in rate_info["rates"]:
+                    if rate["currency"]["iso3"] == currency:
+                        return {
+                            "buy": float(rate["buy"]),   # NPR per unit of foreign currency
+                            "sell": float(rate["sell"])  # NPR per unit of foreign currency
+                        }
+        return None
+
+    @classmethod
+    def convert_currency(cls, amount, date, from_currency, to_currency):
+        """
+        Returns both converted amount and exchange rate
+        """
+        if from_currency == to_currency:
+            return {
+                "converted_amount": amount,
+                "exchange_rate": 1,
+                "success": True
+            }
+        
+        # Get rates for both currencies
+        from_rate = cls.get_exchange_rate(date, from_currency) if from_currency != "NPR" else None
+        to_rate = cls.get_exchange_rate(date, to_currency) if to_currency != "NPR" else None
+    
+        # Conversion logic
+        if from_currency == "NPR" and to_rate:
+            exchange_rate = 1 / to_rate["sell"]
+            return {
+                "converted_amount": amount * exchange_rate,
+                "exchange_rate": exchange_rate,
+                "success": True
+            }
+        elif to_currency == "NPR" and from_rate:
+            exchange_rate = from_rate["buy"]
+            return {
+                "converted_amount": amount * exchange_rate,
+                "exchange_rate": exchange_rate,
+                "success": True
+            }
+        elif from_rate and to_rate:
+            exchange_rate = from_rate["buy"] / to_rate["sell"]
+            return {
+                "converted_amount": amount * exchange_rate,
+                "exchange_rate": exchange_rate,
+                "success": True
+            }
+        
+        return {"success": False, "error": "Exchange rate not available"}

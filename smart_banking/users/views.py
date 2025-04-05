@@ -8,6 +8,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 #from .query_processor import QueryProcessor
+from .models import CurrencyExchange
 
 # Django Imports
 from django.core.exceptions import ValidationError
@@ -49,7 +50,7 @@ ModelManager.get_instance(settings.LLM_MODEL_PATH)
 # Local Imports
 from .models import User, AccountType, Transactions, TransactionType, Account, Withdraw
 from .serializers import (
-    UserSerializer, AccountTypeSerializer, TransactionsSerializer, TransactionTypeSerializer
+    CurrencyConversionSerializer, UserSerializer, AccountTypeSerializer, TransactionsSerializer, TransactionTypeSerializer
 )
 from .tracker import Tracker
 from asgiref.sync import sync_to_async
@@ -448,3 +449,30 @@ def chat(request):
         logger.error(f"Chat error: {str(e)}", exc_info=True)
         return Response({"error": "Internal server error"}, status=500)
     
+class CurrencyConversionView(APIView):
+    def post(self, request):
+        serializer = CurrencyConversionSerializer(data=request.data)
+        if serializer.is_valid():
+            amount = serializer.validated_data['amount']
+            date = serializer.validated_data['date'].strftime('%Y-%m-%d')
+            from_currency = serializer.validated_data['from_currency'].upper()
+            to_currency = serializer.validated_data['to_currency'].upper()
+            
+            converted_amount = CurrencyExchange.convert_currency(
+                amount, date, from_currency, to_currency
+            )
+            
+            if converted_amount is not None:
+                return Response({
+                    'original_amount': amount,
+                    'converted_amount': converted_amount,
+                    'from_currency': from_currency,
+                    'to_currency': to_currency,
+                    'date': date,
+                    'success': True
+                })
+            return Response({
+                'error': 'Conversion not available for the given currencies/date',
+                'success': False
+            }, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

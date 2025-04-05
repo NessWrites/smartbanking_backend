@@ -16,6 +16,8 @@ import re
 from langchain.memory import ConversationBufferMemory, ChatMessageHistory
 from langchain.schema import BaseMessage
 
+from langchain.chains import RetrievalQA
+
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +56,8 @@ class QueryClassifier:
             - "my balance", "check my balance", "current balance"
             - "my transactions", "transaction history"
             - "my loan details", "loan status"
-            - "types of loan", "what loans do you offer"
+            - "types of loan", "what loans do you offer", "more information about loans
+"
             - "account statement"
             - "tell me more about [loan type]"
             - "details about [loan type]"
@@ -398,10 +401,10 @@ class BankingAssistant:
                 
                 # General loan queries (types or specific details)
                 if any(phrase in query_lower for phrase in ['types of loan', 'loan types', 
-                                                            'what loans', 'available loans', 'loan services']):
+                                                            'what loans', 'available loans', 'loan services', 'more information about loans']):
                     print("Types of loan")
                     return self._get_all_loan_types()
-                
+                logger.debug(f"Calling _get_specific_loan_details for query: {query}")
                 # Specific loan details (e.g., "minimum amount for personal loan")
                 return self._get_specific_loan_details(query)
             
@@ -432,19 +435,23 @@ class BankingAssistant:
     def _get_specific_loan_details(self, query: str) -> str:
         """Get details for a specific loan type, answering the specific question asked"""
         query_lower = query.lower()
-        loans = Loans.objects.all()
+        logger.debug(f"Processing loan query: {query}")
+        
+        try:
+            loans = Loans.objects.all()
+            logger.debug(f"Retrieved {loans.count()} loans from database")
+        except Exception as e:
+            logger.error(f"Failed to fetch loans: {str(e)}")
+            raise
+        
         target_loan = None
-    
-        # Identify the loan type
         for loan in loans:
-            all_names = [loan.loanType.lower()]
-            if loan.common_names:
-                all_names.extend([name.strip().lower() for name in loan.common_names.split(',')])
-            if any(name in query_lower for name in all_names):
+            if loan.loanType.lower() in query_lower:  # Match only on loanType
                 target_loan = loan.loanType
+                logger.debug(f"Matched loan type: {target_loan}")
                 break
     
-        # Check if this is a follow-up after listing loans
+        # Check for follow-up context if no direct match
         if not target_loan and 'last_action' in self.context and self.context['last_action'] == 'listed_loan_types':
             for loan in loans:
                 if loan.loanType.lower() in query_lower:
@@ -455,15 +462,13 @@ class BankingAssistant:
             return "Could not identify the loan type. Please specify which loan you're interested in."
     
         try:
+            logger.debug(f"Fetching loan details for: {target_loan}")
             loan = Loans.objects.get(loanType__iexact=target_loan)
             self.context['previous_loan_type'] = loan.loanType
             self.context['last_action'] = 'provided_loan_details'
     
-            # Base response
             response = f"{loan.loanType} Details: "
-    
-            # Answer specific attribute if asked
-            if "minimum" or "min" in query_lower and "amount" or "loan amount" in query_lower:
+            if "minimum" in query_lower and "amount" in query_lower:
                 response += f"The minimum amount for {loan.loanType} is NPR {loan.minAmount:,.2f} "
             elif "maximum" in query_lower and "amount" in query_lower:
                 response += f"The maximum amount for {loan.loanType} is NPR {loan.maxAmount:,.2f} "
@@ -479,7 +484,6 @@ class BankingAssistant:
             elif "description" in query_lower or "about" in query_lower:
                 response += f"Description: {loan.description} "
             else:
-                # Default to full details if no specific attribute is asked
                 response += (
                     f"Description: {loan.description}\n"
                     f"Interest Rate: {loan.interestRate}%\n"
@@ -489,7 +493,6 @@ class BankingAssistant:
                     f"Maximum Term: {loan.maxTerm} months\n"
                 )
     
-            # Add follow-up prompt unless already full details
             if not ("description" in query_lower or "about" in query_lower) and not all(attr in query_lower for attr in ["minimum", "maximum", "interest", "term"]):
                 response += f"with an interest rate of {loan.interestRate}%. "
                 response += f"The maximum loan amount is NPR {loan.maxAmount:,.2f}. "
@@ -499,6 +502,9 @@ class BankingAssistant:
     
         except Loans.DoesNotExist:
             return f"Could not find details for {target_loan}."
+        except Exception as e:
+            logger.error(f"Error fetching specific loan details for {target_loan}: {str(e)}")
+            raise
     
     def _format_transactions(self, transactions) -> str:
         """Format transaction data for response"""

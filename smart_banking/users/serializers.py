@@ -66,3 +66,9 @@ class TransactionsSerializer(serializers.ModelSerializer):
     class Meta:
         model = Transactions
         fields = '__all__'
+        
+class CurrencyConversionSerializer(serializers.Serializer):
+    amount = serializers.FloatField(required=True)
+    date = serializers.DateField(required=True)
+    from_currency = serializers.CharField(max_length=3, required=True)
+    to_currency = serializers.CharField(max_length=3, required=True)
