@@ -44,6 +44,13 @@ from langchain.prompts import PromptTemplate
 from llama_cpp import Llama
 import torch
 
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password
+from rest_framework.permissions import IsAuthenticated, AllowAny
+
     # users/views.py
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -488,17 +495,23 @@ class CurrencyConversionView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
-
-
-User = get_user_model()
-
 class ChangePasswordView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]  # No authentication required for any step
 
     def post(self, request):
         # Step 1: Initial request to send OTP
         if 'send_otp' in request.data:
-            phone_number = request.user.phoneNumber
+            phone_number = request.data.get('phone_number')
+            if not phone_number:
+                return Response({"error": "Phone number is required."}, 
+                              status=status.HTTP_400_BAD_REQUEST)
+            
+            try:
+                user = User.objects.get(phoneNumber=phone_number)
+            except User.DoesNotExist:
+                return Response({"error": "User with this phone number not found."}, 
+                              status=status.HTTP_404_NOT_FOUND)
+
             tracker = Tracker()
             otp_status = tracker.send_otp(phone_number)
             
@@ -511,12 +524,16 @@ class ChangePasswordView(APIView):
                 return Response({"error": "Failed to send OTP."}, 
                               status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # Step 2: Verify OTP and change password
+        # Step 2: Verify OTP and change password (no auth required)
         elif 'verify_otp_and_change_password' in request.data:
-            phone_number = request.user.phoneNumber
+            phone_number = request.data.get('phone_number')  # Get phone number from request
             otp_code = request.data.get('otp_code')
             new_password = request.data.get('new_password')
             confirm_password = request.data.get('confirm_password')
+
+            if not phone_number:
+                return Response({"error": "Phone number is required."}, 
+                              status=status.HTTP_400_BAD_REQUEST)
 
             # Validate passwords match
             if new_password != confirm_password:
@@ -531,11 +548,14 @@ class ChangePasswordView(APIView):
 
             # Change password
             try:
-                user = request.user
+                user = User.objects.get(phoneNumber=phone_number)
                 user.password = make_password(new_password)
                 user.save()
                 return Response({"message": "Password changed successfully."}, 
                               status=status.HTTP_200_OK)
+            except User.DoesNotExist:
+                return Response({"error": "User not found."}, 
+                              status=status.HTTP_404_NOT_FOUND)
             except Exception as e:
                 return Response({"error": str(e)}, 
                               status=status.HTTP_500_INTERNAL_SERVER_ERROR)

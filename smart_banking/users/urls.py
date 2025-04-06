@@ -9,6 +9,7 @@ from .views import  ChangePasswordView, CreateUserView, CurrencyConversionView, 
 # router.register(r'transactions', TransactionViewSet)  # Transactions CRUD
 # router.register(r'transaction-types', TransactionTypeViewSet)  # Transaction types CRUD
 #users/urls.py
+
 urlpatterns = [
     path('users', CreateUserView.as_view(), name='create_user'),
     path('login', LoginView.as_view(), name='login'),
