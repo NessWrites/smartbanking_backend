@@ -268,7 +268,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     "customer support phone number": "+977-9841467002",
     "Customer Support Working Hours": "9 AM - 6 PM",
 
-    # Telephone Banking Number variations
+    # Telephone Banking Number variations;;
     "telephone_banking_number": "+977-9841467002",
     "telephone banking number": "+977-9841467002",
     "Customer Service Phone Number": "+977-9841467002", 
@@ -466,3 +466,13 @@ class CurrencyExchange:
             }
         
         return {"success": False, "error": "Exchange rate not available"}
+    
+    
+class ChatConversation(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    question = models.TextField()
+    answer = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
