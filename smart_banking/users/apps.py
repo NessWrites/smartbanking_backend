@@ -11,6 +11,7 @@ def ready(self):
         """Initialize model when Django starts"""
         from django.conf import settings
         from .model_manager import ModelManager
+        from . import signals
         
         try:
             ModelManager.get_instance(settings.LLM_MODEL_PATH)

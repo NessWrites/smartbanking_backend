@@ -13,7 +13,9 @@ from datetime import date, timedelta
 from decimal import Decimal
 from django.utils import timezone
 import requests  # Add this line at the top of models.py
+import logging
 
+logger = logging.getLogger(__name__)
 
 
 # Custom User Manager
@@ -476,3 +478,31 @@ class ChatConversation(models.Model):
     
     class Meta:
         ordering = ['-created_at']
+    
+    @classmethod
+    def auto_delete_old_records(cls):
+        """Automatically delete records older than 30 days with error handling"""
+        try:
+            cutoff_date = timezone.now() - timedelta(days=30)
+            
+            # Check if any records exist first
+            if not cls.objects.exists():
+                logger.info("No chat history found - database is empty")
+                return 0
+                
+            # Get count before deletion for logging
+            old_records_count = cls.objects.filter(created_at__lt=cutoff_date).count()
+            
+            if old_records_count == 0:
+                logger.info("No old chat history to delete")
+                return 0
+                
+            # Perform deletion
+            deleted_count, _ = cls.objects.filter(created_at__lt=cutoff_date).delete()
+            
+            logger.info(f"Successfully deleted {deleted_count} old chat records")
+            return deleted_count
+            
+        except Exception as e:
+            logger.error(f"Error deleting old chat history: {str(e)}", exc_info=True)
+            return 0

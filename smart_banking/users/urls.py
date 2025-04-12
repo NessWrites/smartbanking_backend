@@ -1,5 +1,5 @@
 from django.urls import path, include
-from .views import  ChangePasswordView, CreateUserView, CurrencyConversionView, LoginView, UserInfoView, CheckBalanceView,DepositView,WithdrawView,AccountStatementView, chat
+from .views import  ChangePasswordView, CreateUserView, CurrencyConversionView, LoginView, UserInfoView, CheckBalanceView,DepositView,WithdrawView,AccountStatementView, chat, chat_history
 #from .views import ChatbotView
 
 # # Define the router for ViewSets
@@ -23,7 +23,7 @@ urlpatterns = [
     path('chat', chat, name='chatbot_response'),
     path('convert-currency', CurrencyConversionView.as_view(), name='convert_currency'),
     path('change-password/', ChangePasswordView.as_view(), name='change-password'),
-    #path("chat", ChatbotView.as_view(), name="chatbot"),
+    path('chat-history', chat_history, name='chat_history'),
 ]
 
 

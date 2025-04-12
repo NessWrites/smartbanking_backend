@@ -8,7 +8,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 #from .query_processor import QueryProcessor
-from .models import CurrencyExchange
+from .models import ChatConversation, CurrencyExchange
 
 # Django Imports
 from django.core.exceptions import ValidationError
@@ -58,7 +58,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth import get_user_model
 from decimal import Decimal
-
+from .models import ChatConversation
 from django.core.exceptions import ObjectDoesNotExist
 from django.contrib.auth.hashers import make_password
 #from langchain_core.runnables import Runnable 
@@ -456,7 +456,12 @@ def chat(request):
         
         assistant = BankingAssistant(llm=llm, user_id=request.user.id)
         response = assistant.process_query(query)
-        
+        # Save conversation to database
+        ChatConversation.objects.create(
+            user=request.user,
+            question=query,
+            answer=response.response
+        )
         return Response({
             "response": response.response,
             "type": response.type.value,
@@ -467,6 +472,26 @@ def chat(request):
         logger.error(f"Chat error: {str(e)}", exc_info=True)
         return Response({"error": "Internal server error"}, status=500)
     
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def chat_history(request):
+    try:
+        print(f"User making request: {request.user}")  # Debug logging
+        conversations = ChatConversation.objects.filter(user=request.user).order_by('-created_at')
+        data = [{
+            'id': conv.id,
+            'question': conv.question,
+            'answer': conv.answer,
+            'created_at': conv.created_at
+        } for conv in conversations]
+        return Response(data)
+    except Exception as e:
+        logger.error(f"Chat history error: {str(e)}", exc_info=True)
+        return Response({
+            "error": "Could not fetch chat history",
+            "details": str(e)
+        }, status=500)
+        
 class CurrencyConversionView(APIView):
     def post(self, request):
         serializer = CurrencyConversionSerializer(data=request.data)
