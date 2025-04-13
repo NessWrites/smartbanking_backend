@@ -1,4 +1,5 @@
 # Standard Library Imports
+from datetime import timedelta, timezone
 import json
 from decimal import Decimal, InvalidOperation
 import re
@@ -8,7 +9,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 #from .query_processor import QueryProcessor
-from .models import ChatConversation, CurrencyExchange
+from .models import ChatConversation, CurrencyExchange, LoanAccount, Loans
 
 # Django Imports
 from django.core.exceptions import ValidationError
@@ -68,7 +69,7 @@ ModelManager.get_instance(settings.LLM_MODEL_PATH)
 # Local Imports
 from .models import User, AccountType, Transactions, TransactionType, Account, Withdraw
 from .serializers import (
-    CurrencyConversionSerializer, UserSerializer, AccountTypeSerializer, TransactionsSerializer, TransactionTypeSerializer
+    CurrencyConversionSerializer, LoanApplicationSerializer, UserSerializer, AccountTypeSerializer, TransactionsSerializer, TransactionTypeSerializer
 )
 from .tracker import Tracker
 from asgiref.sync import sync_to_async
@@ -587,3 +588,234 @@ class ChangePasswordView(APIView):
 
         return Response({"error": "Invalid request."}, 
                       status=status.HTTP_400_BAD_REQUEST)
+        
+class LoanProcessingView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """
+        Process a new loan application
+        Required fields:
+        - loan_type: The type of loan (must match loanType in Loans model)
+        - amount: The loan amount requested
+        - term: Loan duration in months
+        """
+        try:
+            # Get request data
+            loan_type = request.data.get('loan_type')
+            amount = Decimal(request.data.get('amount'))
+            term = int(request.data.get('term'))
+            
+            # Validate inputs
+            if not all([loan_type, amount, term]):
+                return Response({"error": "Missing required fields"}, status=400)
+            
+            if amount <= 0:
+                return Response({"error": "Loan amount must be positive"}, status=400)
+            
+            # Get the loan product details
+            try:
+                loan_product = Loans.objects.get(loanType=loan_type)
+            except Loans.DoesNotExist:
+                return Response({"error": "Loan type not available"}, status=400)
+            
+            # Validate against loan terms
+            if amount < loan_product.minAmount:
+                return Response({
+                    "error": f"Minimum amount for this loan is {loan_product.minAmount}"
+                }, status=400)
+                
+            if amount > loan_product.maxAmount:
+                return Response({
+                    "error": f"Maximum amount for this loan is {loan_product.maxAmount}"
+                }, status=400)
+                
+            if term < loan_product.minTerm:
+                return Response({
+                    "error": f"Minimum term for this loan is {loan_product.minTerm} months"
+                }, status=400)
+                
+            if term > loan_product.maxTerm:
+                return Response({
+                    "error": f"Maximum term for this loan is {loan_product.maxTerm} months"
+                }, status=400)
+            
+            # Get user account
+            account = Account.objects.get(user=request.user)
+            
+            # Check if user already has a loan
+            if account.loanID:
+                return Response({
+                    "error": "You already have an active loan"
+                }, status=400)
+            
+            # Create the loan record (this would be your actual loan account)
+            loan_account = Loans.objects.create(
+                loanType=loan_type,
+                description=f"Personal loan for {request.user.firstName}",
+                interestRate=loan_product.interestRate,
+                minAmount=amount,
+                maxAmount=amount,
+                minTerm=term,
+                maxTerm=term
+            )
+            
+            # Link loan to user account
+            account.loanID = loan_account
+            account.save()
+            
+            # Credit the loan amount to user's account
+            account.balance += amount
+            account.save()
+            
+            # Create transaction record
+            transaction_type = TransactionType.objects.get(transactionType="deposit")
+            Transactions.objects.create(
+                accountID=account,
+                transactionTypeID=transaction_type,
+                amount=amount,
+                reference=f"Loan Disbursement {loan_account.loanID}",
+                description=f"{loan_type} loan disbursement"
+            )
+            
+            return Response({
+                "message": "Loan processed successfully",
+                "loan_id": loan_account.loanID,
+                "amount": amount,
+                "term": term,
+                "interest_rate": loan_product.interestRate,
+                "new_balance": account.balance
+            })
+            
+        except Account.DoesNotExist:
+            return Response({"error": "Account not found"}, status=404)
+        except Exception as e:
+            logger.error(f"Loan processing error: {str(e)}")
+            return Response({"error": "Loan processing failed"}, status=500)
+        
+class LoanStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            account = Account.objects.get(user=request.user)
+            
+            if not account.loanID:
+                return Response({
+                    "message": "No active loan",
+                    "has_loan": False
+                })
+            
+            loan = account.loanID
+            return Response({
+                "has_loan": True,
+                "loan_type": loan.loanType,
+                "amount": loan.maxAmount,  # Actual loan amount
+                "outstanding": loan.maxAmount,  # You'll need to calculate this
+                "interest_rate": loan.interestRate,
+                "term": loan.maxTerm,
+                "start_date": loan.createdAt
+            })
+            
+        except Exception as e:
+            logger.error(f"Loan status error: {str(e)}")
+            return Response({"error": "Could not check loan status"}, status=500)
+
+class LoanRepaymentView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            amount = Decimal(request.data.get('amount'))
+            
+            if amount <= 0:
+                return Response({"error": "Amount must be positive"}, status=400)
+            
+            account = Account.objects.get(user=request.user)
+            
+            if not account.loanID:
+                return Response({"error": "No active loan to repay"}, status=400)
+            
+            # Simple repayment logic - in reality you'd calculate interest, etc.
+            if account.balance < amount:
+                return Response({"error": "Insufficient balance"}, status=400)
+            
+            # Deduct from balance
+            account.balance -= amount
+            account.save()
+            
+            # Create repayment transaction
+            transaction_type = TransactionType.objects.get(transactionType="withdraw")
+            Transactions.objects.create(
+                accountID=account,
+                transactionTypeID=transaction_type,
+                amount=amount,
+                reference=f"Loan Repayment {account.loanID.loanID}",
+                description=f"{account.loanID.loanType} loan repayment"
+            )
+            
+            return Response({
+                "message": "Repayment successful",
+                "amount": amount,
+                "new_balance": account.balance
+            })
+            
+        except Exception as e:
+            logger.error(f"Repayment error: {str(e)}")
+            return Response({"error": "Repayment failed"}, status=500)
+
+class LoanApplicationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = LoanApplicationSerializer(data=request.data)
+        if serializer.is_valid():
+            try:
+                product = Loans.objects.get(
+                    product_id=serializer.validated_data['loanID'],
+                    is_active=True
+                )
+                
+                # Validate amount and term against product
+                amount = serializer.validated_data['amount']
+                term = serializer.validated_data['term']
+                
+                if not (product.min_amount <= amount <= product.max_amount):
+                    return Response({
+                        "error": f"Amount must be between {product.min_amount} and {product.max_amount}"
+                    }, status=400)
+                
+                if not (product.min_term <= term <= product.max_term):
+                    return Response({
+                        "error": f"Term must be between {product.min_term} and {product.max_term} months"
+                    }, status=400)
+                
+                # Create loan account
+                account = Account.objects.get(user=request.user)
+                loan = LoanAccount.objects.create(
+                    account=account,
+                    product=product,
+                    amount=amount,
+                    outstanding=amount,  # Initially same as amount
+                    term=term,
+                    start_date=timezone.now().date(),
+                    next_payment_date=calculate_first_payment_date(term),
+                    interest_rate=product.interest_rate,  # Could be customized
+                    status='pending'
+                )
+                
+                # Return response
+                return Response({
+                    "message": "Loan application submitted",
+                    "loan_id": loan.loan_id,
+                    "status": "pending"
+                }, status=201)
+                
+            except Loans.DoesNotExist:
+                return Response({"error": "Loan product not found"}, status=404)
+            except Account.DoesNotExist:
+                return Response({"error": "Account not found"}, status=404)
+        return Response(serializer.errors, status=400)
+
+def calculate_first_payment_date(term_months):
+    return timezone.now().date() + timedelta(days=30)  # First payment in 1 month

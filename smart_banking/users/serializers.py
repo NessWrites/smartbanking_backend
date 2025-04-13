@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import (
-     Admin, AccountType, Loans, TransactionType,
+     Admin, AccountType, LoanAccount, Loans, TransactionType,
     Account, Customers, User, Transactions
 )
 # Users Serializer
@@ -72,3 +72,21 @@ class CurrencyConversionSerializer(serializers.Serializer):
     date = serializers.DateField(required=True)
     from_currency = serializers.CharField(max_length=3, required=True)
     to_currency = serializers.CharField(max_length=3, required=True)
+    
+class LoansSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Loans
+        fields = '__all__'
+
+class LoanAccountSerializer(serializers.ModelSerializer):
+    product = LoansSerializer(read_only=True)
+    
+    class Meta:
+        model = LoanAccount
+        fields = '__all__'
+        read_only_fields = ['outstanding', 'status', 'created_at']
+
+class LoanApplicationSerializer(serializers.Serializer):
+    product_id = serializers.IntegerField()
+    amount = serializers.DecimalField(max_digits=15, decimal_places=2)
+    term = serializers.IntegerField()

@@ -14,6 +14,7 @@ from decimal import Decimal
 from django.utils import timezone
 import requests  # Add this line at the top of models.py
 import logging
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
@@ -48,22 +49,6 @@ class Admin(models.Model):
     def __str__(self):
         return f"Admin {self.adminID} - {self.department}"
 
-#4 Loans Model
-class Loans(models.Model):
-    loanID = models.AutoField(primary_key=True)
-    loanType = models.CharField(max_length=100)
-    description = models.TextField(blank=True, null=True)
-    interestRate = models.DecimalField(max_digits=5, decimal_places=2)
-    minAmount = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
-    maxAmount = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
-    minTerm = models.IntegerField(blank=True, null=True)
-    maxTerm = models.IntegerField(blank=True, null=True)
-    createdAt = models.DateTimeField(auto_now_add=True, blank=True, null=True)  # Allow NULL values
-
-    def __str__(self):
-        return f"{self.loanType} ({self.interestRate}%)"
-
-
 
 #3 AccountType Model
 class AccountType(models.Model):
@@ -75,16 +60,59 @@ class AccountType(models.Model):
     def __str__(self):
         return f"{self.depositType} ({self.depositRates}%)"
 
+
 # Account Model
 class Account(models.Model):
     accountNumber = models.BigIntegerField(primary_key=True, unique=True)
     accountTypeID = models.ForeignKey(AccountType, on_delete=models.CASCADE)
     balance = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
-    loanID = models.ForeignKey(Loans, on_delete=models.SET_NULL, null=True, blank=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
 
     def __str__(self):
         return f"Account {self.accountNumber}"
+
+#4 Loans Model
+class Loans(models.Model):
+    loanID = models.AutoField(primary_key=True)
+    loanType = models.CharField(max_length=100)
+    description = models.TextField(blank=True, null=True)
+    interestRate = models.DecimalField(max_digits=5, decimal_places=2)
+    minAmount = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    maxAmount = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    minTerm = models.IntegerField(blank=True, null=True)
+    maxTerm = models.IntegerField(blank=True, null=True)
+    createdAt = models.DateTimeField(auto_now_add=True, blank=True, null=True)  # Allow NULL values
+    requirements = models.TextField(blank=True, null=True)  # New field
+    is_active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return f"{self.loanType} ({self.interestRate}%)"
+
+# Individual Loan Accounts (user's actual loans)
+class LoanAccount(models.Model):
+    LOAN_STATUS_CHOICES = [
+        ('pending', 'Pending Approval'),
+        ('active', 'Active'),
+        ('paid', 'Paid Off'),
+        ('defaulted', 'Defaulted'),
+        ('rejected', 'Rejected')
+    ]
+    
+    loan_id = models.AutoField(primary_key=True)
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='loans')
+    product = models.ForeignKey(Loans, on_delete=models.PROTECT)
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
+    outstanding = models.DecimalField(max_digits=15, decimal_places=2)
+    term = models.IntegerField()  # in months
+    start_date = models.DateField()
+    next_payment_date = models.DateField()
+    status = models.CharField(max_length=20, choices=LOAN_STATUS_CHOICES, default='pending')
+    interest_rate = models.DecimalField(max_digits=5, decimal_places=2)  # May differ from product rate
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.account.user.first_name}'s {self.product.name} (NPR {self.amount})"
+
 
 
 #1 Users Model
@@ -397,36 +425,50 @@ class Withdraw(models.Model):
         return f"Withdraw {self.withdrawID} - {self.withdrawal_type} - {self.transaction.reference}"
 
 class CurrencyExchange:
+
     """
-    Handles currency exchange operations using NRB API.
+    Handles currency exchange operations using NRB API with caching.
     """
     BASE_URL = "https://www.nrb.org.np/api/forex/v1/rates"
+    CACHE_TIMEOUT = 3600  # 1 hour cache
     
     @classmethod
     def get_exchange_rate(cls, date, currency):
         """
-        Fetches exchange rate for the given date and currency from NRB API.
-        Returns buy/sell rates for the currency against NPR.
+        Fetches exchange rate with caching.
         """
-        params = {
-            "from": date,
-            "to": date,
-            "per_page": 50,
-            "page": 1
-        }
-
-        response = requests.get(cls.BASE_URL, params=params)
-        data = response.json()
-
-        if data["status"]["code"] == 200:
-            for rate_info in data["data"]["payload"]:
-                for rate in rate_info["rates"]:
-                    if rate["currency"]["iso3"] == currency:
-                        return {
-                            "buy": float(rate["buy"]),   # NPR per unit of foreign currency
-                            "sell": float(rate["sell"])  # NPR per unit of foreign currency
-                        }
-        return None
+        cache_key = f"exchange_rate_{date}_{currency}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return cached_data
+            
+        try:
+            params = {
+                "from": date,
+                "to": date,
+                "per_page": 50,
+                "page": 1
+            }
+            
+            response = requests.get(cls.BASE_URL, params=params, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data["status"]["code"] == 200:
+                for rate_info in data["data"]["payload"]:
+                    for rate in rate_info["rates"]:
+                        if rate["currency"]["iso3"] == currency:
+                            result = {
+                                "buy": float(rate["buy"]),
+                                "sell": float(rate["sell"])
+                            }
+                            cache.set(cache_key, result, cls.CACHE_TIMEOUT)
+                            return result
+            return None
+            
+        except requests.RequestException as e:
+            logger.error(f"NRB API request failed: {str(e)}")
+            return None
 
     @classmethod
     def convert_currency(cls, amount, date, from_currency, to_currency):

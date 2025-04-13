@@ -1,3 +1,4 @@
+from datetime import datetime
 import re
 import logging
 from typing import Dict, Any, Optional, List
@@ -10,7 +11,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, validator
 from django.db.models import Q
-from .models import Account, Loans, Transactions
+from .models import Account, CurrencyExchange, LoanAccount, Loans, Transactions
 from .serializers import AccountSerializer, LoansSerializer, TransactionsSerializer
 from langchain.memory import ConversationBufferMemory, ChatMessageHistory
 
@@ -43,6 +44,7 @@ class QueryClassifier:
         
     def _initialize_patterns(self):
         """Initialize pre-compiled regex patterns"""
+        
         self.pattern_map = {
             QueryType.STEPS: [
                 re.compile(r'how to', re.IGNORECASE),
@@ -50,6 +52,8 @@ class QueryClassifier:
                 re.compile(r'process (to|for)', re.IGNORECASE),
                 re.compile(r'what (do|should) i do to', re.IGNORECASE),
                 re.compile(r'way to', re.IGNORECASE),
+                re.compile(r'about', re.IGNORECASE),
+                
             ],
             QueryType.DIRECT: [
                 re.compile(r'\b(my|check|view|show)\s+(balance|transactions?|loans?)\b', re.IGNORECASE),
@@ -58,6 +62,9 @@ class QueryClassifier:
                 re.compile(r'\b(tell me more|details?)\s+about\b', re.IGNORECASE),
                 re.compile(r'\binterest\s+rate(s)?\b', re.IGNORECASE),
                 re.compile(r'\b(send|transfer)\s+money\b', re.IGNORECASE),
+                re.compile(r'\b(criteria|requirements|eligibility|necessary|need|required)\s+(for|to)\s+(loan|education loan|personal loan)\b', re.IGNORECASE),
+                re.compile(r'\bwhat (do|should) i need (for|to get)\s+(a|an)\s+loan\b', re.IGNORECASE),
+                re.compile(r'\b(requirements?|criteria|eligibility|documents? needed|papers? required|what (do|does) i need)\b', re.IGNORECASE),
             ],
             QueryType.CALCULATIONS: [
                 re.compile(r'calculat(e|ion)', re.IGNORECASE),
@@ -65,6 +72,18 @@ class QueryClassifier:
                 re.compile(r'convert', re.IGNORECASE),
                 re.compile(r'\d+\s*%\s+of\s+\d+', re.IGNORECASE),
                 re.compile(r'emi', re.IGNORECASE),
+                re.compile(r'installment interest', re.IGNORECASE),
+                re.compile(r'next (payment|installment)', re.IGNORECASE),
+                re.compile(r'how much interest', re.IGNORECASE),
+                re.compile(r'\d+\s*(month|year)s?\s+at\s+\d+%', re.IGNORECASE),
+                re.compile(r'next (interest|installment|payment)', re.IGNORECASE),
+                re.compile(r'(upcoming|next month\'?s?) interest', re.IGNORECASE),
+                re.compile(r'exchange \d+', re.IGNORECASE),
+                re.compile(r'\d+\s*(rupee|dollar|euro|pound)s? to', re.IGNORECASE),
+                re.compile(r'change \d+\s*\w+\s*to', re.IGNORECASE),
+                re.compile(r'how much (is|are) \d+', re.IGNORECASE),
+                re.compile(r'(change|convert|exchange)\s*\d+\s*\w+\s*(to|into|in)', re.IGNORECASE),
+                re.compile(r'\d+\s*(rupee|dollar|euro|pound)s? (to|into|in)', re.IGNORECASE)
             ],
             "OFF_TOPIC": [
                 re.compile(r'\b(trump|biden|politics|sports|weather|movie)\b', re.IGNORECASE),
@@ -95,21 +114,67 @@ class QueryClassifier:
         return None
 
     def classify(self, query: str) -> QueryType:
-        """Classify query with robust error handling"""
+        """Classify query with robust error handling and improved currency detection"""
         if not self._is_banking_related(query):
             raise ValueError("This query is not related to banking.")
         
         try:
+            query_lower = query.lower()
+            
+            # Enhanced currency conversion detection
+            if any(term in query_lower for term in ['convert', 'exchange', 'change']):
+                # Check for currency indicators in the query
+                currency_indicators = ['rupee', 'inr', 'npr', 'dollar', 'euro', 'pound', 'rs', 'रू', 'to', 'into']
+                if any(indicator in query_lower for indicator in currency_indicators):
+                    return QueryType.CALCULATIONS
+                    
+            # Then try the normal pattern matching
             query_type = self._pattern_match(query)
             if query_type:
                 return query_type
-            return QueryType.DIRECT  # Default fallback
+                
+            # Default fallback based on content
+            if any(term in query_lower for term in ['calculate', 'how much', 'what is']):
+                return QueryType.CALCULATIONS
+                
+            return QueryType.DIRECT  # Final fallback
+            
         except Exception as e:
             logger.error(f"Classification error: {str(e)}")
-            return QueryType.STEPS  # Default fallback
-
+            return QueryType.STEPS  # Safe fallback
+    
 class BankingAssistant:
     """Main banking assistant class with context-aware capabilities"""
+    
+    # Add this at the class level in BankingAssistant
+    CURRENCY_MAPPING = {
+    # Full names and common abbreviations
+    'us dollar': 'USD', 'us dollars': 'USD', 'dollar': 'USD', 'dollars': 'USD', '$': 'USD',
+    'euro': 'EUR', 'euros': 'EUR', '€': 'EUR',
+    'pound': 'GBP', 'pounds': 'GBP', 'sterling': 'GBP', '£': 'GBP',
+    'swiss franc': 'CHF', 'franc': 'CHF',
+    'australian dollar': 'AUD',
+    'canadian dollar': 'CAD',
+    'singapore dollar': 'SGD',
+    'japanese yen': 'JPY', 'yen': 'JPY', '¥': 'JPY',
+    'chinese yuan': 'CNY', 'yuan': 'CNY', 'renminbi': 'CNY',
+    'saudi riyal': 'SAR', 'riyal': 'SAR',
+    'qatari riyal': 'QAR',
+    'thai baht': 'THB', 'baht': 'THB', '฿': 'THB',
+    'uae dirham': 'AED', 'dirham': 'AED',
+    'malaysian ringgit': 'MYR', 'ringgit': 'MYR', 'rm': 'MYR',
+    'korean won': 'KRW', 'won': 'KRW', '₩': 'KRW',
+    'swedish krona': 'SEK', 'krona': 'SEK',
+    'danish krone': 'DKK', 'krone': 'DKK',
+    'hong kong dollar': 'HKD',
+    'kuwaiti dinar': 'KWD', 'dinar': 'KWD',
+    'bahraini dinar': 'BHD',
+    'omani rial': 'OMR', 'rial': 'OMR',
+    
+    # Indian and Nepali currencies (from previous)
+    'indian rupee': 'INR', 'indian rupees': 'INR', 'inr': 'INR', '₹': 'INR',
+    'nepali rupee': 'NPR', 'nepali rupees': 'NPR', 'npr': 'NPR', 'रू': 'NPR'
+}
     def __init__(self, llm: LlamaCpp, user_id: int = None, max_history: int = 10):
         self.llm = llm
         self.user_id = user_id
@@ -182,127 +247,110 @@ class BankingAssistant:
         if "loan" in query_lower:
             return self._handle_loan_query(query)
         elif "transaction" in query_lower:
-            return self._handle_transaction_query()
+            return self._handle_transaction_query(query)
         elif "balance" in query_lower:
             return self._handle_balance_query()
         elif "account" in query_lower:
             return self._handle_account_query()
             
         return "I couldn't find that information. Please try being more specific."
-    
+
     def _handle_loan_query(self, query: str) -> str:
-        """Handle all loan-related queries with context awareness"""
+        """Comprehensive loan query handler that replaces multiple functions"""
         query_lower = query.lower()
         
-        # Check for personal loan details
-        if any(phrase in query_lower for phrase in ["my loan", "loan status", "my loans"]):
-            return self._get_user_loan_details()
-            
-        # Check for general loan information
-        if any(phrase in query_lower for phrase in ['types of loan', 'loan types', 'available loans']):
-            return self._get_all_loan_types()
-            
-        # Check for interest rate queries
-        if "interest rate" in query_lower or "interest" in query_lower:
-            return self._handle_interest_rate_query(query)
-            
-        # Specific loan details
-        return self._get_specific_loan_details(query)
+        # 1. Loan Products Listing
+        if any(phrase in query_lower for phrase in ['types of loan', 'loan products', 'what loans']):
+            return self._get_loan_products_list()
+        
+        # 2. Loan Criteria/Requirements
+        elif any(phrase in query_lower for phrase in ['criteria', 'requirements', 'eligibility', 'necessary', 'need', 'required']):
+            return self._get_loan_criteria(query)
+        
+        # 2. Personal Loan Status
+        elif any(phrase in query_lower for phrase in ['my loan', 'loan status']):
+            return self._get_personal_loan_status()
+        
+        # Interest calculation only for active loans
+        elif any(phrase in query_lower for phrase in [
+            'next interest', 
+            'installment interest',
+            'payment interest',
+            'next month interest'
+        ]):
+            return self._calculate_installment_interest(query)
+        
+        # 3. Specific Loan Details
+        elif any(word in query_lower for word in ['home loan', 'personal loan', 'business loan']):
+            return self._get_specific_loan_info(query_lower)
+        
+        # 4. Interest Rate Queries
+        elif "interest rate" in query_lower or "interest" in query_lower:
+            return self._handle_interest_rate_question(query_lower)
+        
+        # 5. Calculation Requests
+        elif any(term in query_lower for term in ['calculate', 'emi', 'monthly payment']):
+            return self._financial_calculator(query)
+        
+        return self._get_loan_help_message()
     
-    def _handle_interest_rate_query(self, query: str) -> str:
-        """Specialized handler for interest rate queries"""
-        try:
-            loans = Loans.objects.all()
-            
-            # Check if we have context about a specific loan
-            if self.context.get('previous_loan_type'):
-                for loan in loans:
-                    if loan.loanType.lower() == self.context['previous_loan_type'].lower():
-                        return (
-                            f"The interest rate for {loan.loanType} is {loan.interestRate}%. "
-                            f"Would you like to know more about {loan.loanType}?"
-                        )
-            
-            # If asking about specific loan type
-            for loan in loans:
-                if loan.loanType.lower() in query.lower():
-                    self.context['previous_loan_type'] = loan.loanType
-                    return (
-                        f"The interest rate for {loan.loanType} is {loan.interestRate}%. "
-                        f"Would you like to know more about {loan.loanType}?"
-                    )
-            
-            # If general interest rate question
-            if "interest rate" in query.lower() or "interest" in query.lower():
-                response = "Here are interest rates for our loan products:\n"
-                response += "\n".join(
-                    f"- {loan.loanType}: {loan.interestRate}%"
-                    for loan in loans
-                )
-                response += "\n\nWhich loan product are you interested in?"
-                self.context['last_action'] = 'listed_interest_rates'
-                return response
-                
-            return "Could not find interest rate information. Please specify a loan type."
-        except Exception as e:
-            logger.error(f"Interest rate query error: {str(e)}")
-            return "Unable to retrieve interest rates at this time."
-    
-    def _get_all_loan_types(self) -> str:
-        """Retrieve all available loan types with context tracking"""
-        try:
-            loans = Loans.objects.all()
-            if not loans.exists():
-                return "No loan products currently available."
-            
-            loan_list = "\n".join(
-                f"- {loan.loanType} (Interest: {loan.interestRate}%)" 
-                for loan in loans
-            )
-            
-            self.context['last_action'] = 'listed_loan_types'
+    def _get_loan_criteria(self, query: str) -> str:
+        """Handle loan eligibility/criteria questions"""
+        query_lower = query.lower()
+        
+        # Identify loan type from query
+        loan_type = None
+        for product in Loans.objects.filter(is_active=True):
+            if product.loanType.lower() in query_lower:
+                loan_type = product
+                break
+        
+        if not loan_type:
+            # If no specific loan mentioned, show general criteria
             return (
-                f"Available loan types:\n{loan_list}\n\n"
-                f"You can ask about specific loans for more details, for example:\n"
-                f"'What's the interest rate for home loans?'\n"
-                f"'Tell me more about personal loans'"
+                "General loan requirements:\n"
+                "1. Valid citizenship certificate\n"
+                "2. Minimum age: 18 years\n"
+                "3. Regular income source\n"
+                "4. Good credit history\n\n"
+                "Please specify a loan type for specific criteria (e.g., 'education loan requirements')."
             )
-        except Exception as e:
-            logger.error(f"Error getting loan types: {str(e)}")
-            return "Unable to retrieve loan products at this time."
-    
-    def _get_specific_loan_details(self, query: str) -> str:
-        """Get details for a specific loan type with context awareness"""
-        try:
-            loans = Loans.objects.all()
-            target_loan = None
-            
-            # First try to match loan type from query
-            for loan in loans:
-                if loan.loanType.lower() in query.lower():
-                    target_loan = loan
-                    break
-            
-            # Check context if no direct match (follow-up question)
-            if not target_loan and self.context.get('last_action') == 'listed_loan_types':
-                for loan in loans:
-                    if loan.loanType.lower() in query.lower():
-                        target_loan = loan
-                        break
-            
-            # Still no match - suggest available options
-            if not target_loan:
-                return self._suggest_loan_types(loans)
-            
-            # Update context and format response
-            self.context['previous_loan_type'] = target_loan.loanType
-            self.context['last_action'] = 'provided_loan_details'
-            
-            return self._format_loan_details(target_loan, query)
-        except Exception as e:
-            logger.error(f"Error getting loan details: {str(e)}")
-            return "Unable to retrieve loan details at this time."
-    
+        
+        # Loan-specific criteria
+        response = f"Requirements for {loan_type.loanType}:\n"
+        
+        if loan_type.loanType.lower() == "education loan":
+            response += (
+                "1. Admission letter from recognized institution\n"
+                "2. Fee structure from the institution\n"
+                "3. Parent/guardian as co-signer\n"
+                "4. Academic transcripts\n"
+                f"5. Minimum amount: NPR {loan_type.minAmount:,.2f}\n"
+                f"Interest rate: {loan_type.interestRate}%\n\n"
+                "Would you like to apply for this loan?"
+            )
+        elif loan_type.loanType.lower() == "personal loan":
+            response += (
+                "1. 3 months salary slips\n"
+                "2. Employment verification\n"
+                "3. Bank statements (6 months)\n"
+                f"4. Minimum amount: NPR {loan_type.minAmount:,.2f}\n"
+                f"Interest rate: {loan_type.interestRate}%\n\n"
+                "Apply at any branch with these documents."
+            )
+        else:
+            response += (
+                f"1. Minimum amount: NPR {loan_type.minAmount:,.2f}\n"
+            f"2. Maximum amount: NPR {loan_type.maxAmount:,.2f}\n"
+            f"3. Interest rate: {loan_type.interestRate}%\n"
+            f"4. Minimum term: {loan_type.minTerm} months\n"
+            f"5. Maximum term: {loan_type.maxTerm} months\n"
+            "6. Valid citizenship document\n\n"
+            "Visit our website or branch for complete details."
+            )
+        
+        return response
+
     def _suggest_loan_types(self, loans) -> str:
         """Suggest available loan types when none is specified"""
         loan_names = [loan.loanType for loan in loans]
@@ -312,66 +360,40 @@ class BankingAssistant:
             f"For example: 'What's the interest rate for {loan_names[0]}?'"
         )
     
-    def _format_loan_details(self, loan: Loans, query: str) -> str:
-        """Format loan details based on what was asked"""
-        query_lower = query.lower()
-        response = f"{loan.loanType} Details:\n"
-        
-        # Handle specific attribute queries
-        if "minimum" in query_lower and "amount" in query_lower:
-            response += f"- Minimum amount: NPR {loan.minAmount:,.2f}\n"
-        elif "maximum" in query_lower and "amount" in query_lower:
-            response += f"- Maximum amount: NPR {loan.maxAmount:,.2f}\n"
-        elif "term" in query_lower or "duration" in query_lower:
-            response += f"- Term: {loan.minTerm} to {loan.maxTerm} months\n"
-        
-        # Always include interest rate if not already mentioned
-        if "interest" not in query_lower and "rate" not in query_lower:
-            response += f"- Interest rate: {loan.interestRate}%\n"
-        
-        # Include description if asking general info
-        if any(word in query_lower for word in ['about', 'details', 'information']):
-            response += f"- Description: {loan.description}\n"
-        
-        response += f"\nWhat else would you like to know about {loan.loanType}?"
-        return response
-    
-    def _get_user_loan_details(self) -> str:
-        """Get loan details for the authenticated user"""
-        if not self.user_id:
-            return "Please log in to view your loan details."
-            
+    def _handle_transaction_query(self, query: str) -> str:
+        """Handle transaction history queries with dynamic limit"""
         try:
-            account = Account.objects.get(user__id=self.user_id)
-            if not account.loanID:
-                return self._suggest_loan_types(Loans.objects.all())
-                
-            loan = account.loanID
-            return (
-                f"Your {loan.loanType} Loan Details:\n"
-                f"- Amount: NPR {loan.loanAmount:,.2f}\n"
-                f"- Outstanding: NPR {loan.outstandingAmount:,.2f}\n"
-                f"- Interest Rate: {loan.interestRate}%\n"
-                f"- Term: {loan.loanTerm} months"
-            )
-        except Exception as e:
-            logger.error(f"Error getting user loan details: {str(e)}")
-            return "Unable to retrieve your loan details at this time."
+            # 1. Authentication check
+            if not self.user_id:
+                return "Please log in to view your transaction history."
     
-    def _handle_transaction_query(self) -> str:
-        """Handle transaction history queries"""
-        if not self.user_id:
-            return "Please log in to view your transaction history."
-            
-        try:
+            # 2. Parse requested transaction count (default to 5)
+            count = 5
+            if "last transaction" in query.lower():
+                count = 1
+            else:
+                numbers = re.findall(r'\d+', query)
+                if numbers:
+                    count = min(int(numbers[0]), 20)  # Max 20 transactions
+    
+            # 3. Get transactions
             account = Account.objects.get(user__id=self.user_id)
             transactions = Transactions.objects.filter(
-                Q(account=account) & Q(status='completed')
-            )
-            return self._format_transactions(transactions)
+                accountID=account
+            ).order_by('-date')[:count]
+            
+            if not transactions.exists():
+                return "No transactions found."
+                
+            # 4. Return serialized data
+            serializer = TransactionsSerializer(transactions, many=True)
+            return str(serializer.data)
+    
+        except Account.DoesNotExist:
+            return "Account not found. Please contact customer support."
         except Exception as e:
-            logger.error(f"Transaction query error: {str(e)}")
-            return "Unable to retrieve transactions at this time."
+            logger.error(f"Transaction error: {str(e)}")
+            return "Unable to retrieve transactions. Please try again later."
     
     def _handle_balance_query(self) -> str:
         """Handle balance queries"""
@@ -404,32 +426,72 @@ class BankingAssistant:
             return "Unable to retrieve account information at this time."
     
     def _format_transactions(self, transactions) -> str:
-        """Format transaction data for response"""
         if not transactions.exists():
             return "No recent transactions found."
             
-        serialized = TransactionsSerializer(transactions, many=True).data
         return "Recent transactions:\n" + "\n".join(
-            f"{t['amount']:,.2f} NPR - {t['description']} ({t['date']})"
-            for t in serialized
+            f"{t.amount:,.2f} NPR - {t.description} ({t.date})"  # Using direct model fields
+            for t in transactions
         )
     
     def _financial_calculator(self, query: str) -> str:
         """Handle financial calculations"""
         try:
+            query_lower = query.lower()
+            
+            # Handle installment interest queries
+            if any(term in query_lower for term in [
+                'next interest', 
+                'next installment',
+                'next payment',
+                'upcoming interest',
+                'how much interest will i pay'
+            ]):
+                return self._calculate_installment_interest(query)
+            
+            # Handle installment interest queries
+            if any(term in query_lower for term in ['installment interest', 'next interest']):
+                return self._calculate_installment_interest(query)
+                
+            # Extract numbers from query
             amounts = [float(x) for x in re.findall(r'\d+\.?\d*', query)]
             
-            if "interest" in query.lower() and len(amounts) >= 2:
-                return self._calculate_interest(amounts)
-            elif "emi" in query.lower() and len(amounts) >= 3:
-                return self._calculate_emi(amounts)
+            # Try to get rate if specified with % sign
+            rate_match = re.search(r'(\d+\.?\d*)%', query)
+            if rate_match:
+                amounts.insert(1, float(rate_match.group(1)))  # Insert rate at position 1
                 
-            return "Please provide all required values (amount, rate, duration)"
+            # Handle different calculation types
+            if "emi" in query_lower:
+                if len(amounts) >= 3:
+                    return self._calculate_emi(amounts)
+                return (
+                    "Please provide all required values for EMI calculation:\n"
+                    "1. Loan amount (e.g., 100000)\n"
+                    "2. Interest rate (e.g., 10.5%)\n"
+                    "3. Duration in months (e.g., 24)"
+                )
+            elif "interest" in query_lower:
+                if len(amounts) >= 2:
+                    return self._calculate_interest(amounts)
+                return (
+                    "Please provide:\n"
+                    "1. Principal amount\n"
+                    "2. Interest rate\n"
+                    "Optionally: Time period in years"
+                )
+                
+            return (
+                "I can help with:\n"
+                "- EMI calculations (say 'calculate EMI for 100000 at 10% for 24 months')\n"
+                "- Interest calculations (say 'calculate interest on 50000 at 8%')\n"
+                "- Next installment interest (say 'what's my next interest payment')"
+            )
             
         except Exception as e:
             logger.error(f"Calculation error: {str(e)}")
-            return "Unable to perform calculation"
-    
+            return "Unable to perform calculation. Please provide clear numbers and what to calculate."
+        
     def _calculate_interest(self, amounts) -> str:
         """Calculate simple interest"""
         principal, rate = amounts[0], amounts[1]
@@ -456,53 +518,282 @@ class BankingAssistant:
             f"Monthly EMI: NPR {emi:,.2f}"
         )
     
-    def _currency_converter(self, query: str) -> str:
-        """Handle currency conversions"""
+
+        """Calculate EMI for loans"""
+        principal, rate, months = amounts[0], amounts[1], amounts[2]
+        monthly_rate = rate / 12 / 100
+        emi = principal * monthly_rate * (1 + monthly_rate)**months / ((1 + monthly_rate)**months - 1)
+        return (
+            f"EMI Calculation:\n"
+            f"Loan Amount: NPR {principal:,.2f}\n"
+            f"Interest Rate: {rate}% p.a.\n"
+            f"Tenure: {months} months\n"
+            f"Monthly EMI: NPR {emi:,.2f}"
+        )
+    
+    def _calculate_installment_interest(self, query: str) -> str:
+        """Calculate interest for next installment based on user's active loan"""
         try:
-            amounts = [float(x) for x in re.findall(r'\d+\.?\d*', query)]
-            currencies = re.findall(r'[A-Z]{3}', query.upper())
+            if not self.user_id:
+                return "Please log in to view your loan details."
             
-            if len(amounts) >= 1 and len(currencies) >= 2:
-                amount = amounts[0]
-                from_curr, to_curr = currencies[0], currencies[1]
-                rate = self._get_exchange_rate(from_curr, to_curr)
-                converted = amount * rate
+            # Get only ACTIVE loans
+            active_loans = LoanAccount.objects.filter(
+            account__user__id=self.user_id,
+            status='active'  # Only active loans
+        )
+        
+            if not active_loans.exists():
+            # Helpful message that distinguishes no loans vs no active loans
+                all_loans = LoanAccount.objects.filter(account__user__id=self.user_id)
+                if all_loans.exists():
+                    return "You have no active loans currently. Your loans are pending approval."
+                return "You don't have any loans."
+        
+            loan = active_loans.first()
+            monthly_interest = (loan.outstanding * loan.interest_rate) / (12 * 100)
+
+            
+            # Calculate days until next payment (for more accurate daily interest if needed)
+            from datetime import date
+            days_until_payment = (loan.next_payment_date - date.today()).days
+            
+            return (
+                f"Next Installment Interest Calculation for your {loan.product.loanType}:\n"
+                f"- Outstanding Principal: NPR {loan.outstanding:,.2f}\n"
+                f"- Annual Interest Rate: {loan.interest_rate}%\n"
+                f"- Monthly Interest: NPR {monthly_interest:,.2f}\n"
+                f"- Next Payment Due: {loan.next_payment_date} (in {days_until_payment} days)\n\n"
+                f"Note: Your actual payment may include both principal and interest components."
+            )
+            
+        except Exception as e:
+            logger.error(f"Installment interest calculation error: {str(e)}")
+            return "Unable to calculate your installment interest. Please try again later."
+
+    def _get_loan_products_list(self) -> str:
+        """List all available loan products"""
+        products = Loans.objects.filter(is_active=True)
+        if not products.exists():
+            return "No loan products currently available."
+        
+        response = "Available loan products:\n"
+        for product in products:
+            response += (
+                f"- {product.loanType}: "
+                f"NPR {product.minAmount or 0:,.2f}-{product.maxAmount or 0:,.2f} "
+                f"at {product.interestRate}% for "
+                f"{product.minTerm or 0}-{product.maxTerm or 0} months\n"
+            )
+        return response + "\nAsk about a specific loan for more details."
+
+    def _get_personal_loan_status(self) -> str:
+        """Get user's personal loan details"""
+        if not self.user_id:
+            return "Please log in to view your loan details."
+        
+        try:
+            loans = LoanAccount.objects.filter(account__user__id=self.user_id)
+            if not loans.exists():
+                return "You don't have any active loans."
+            
+            response = "Your loan details:\n"
+            for loan in loans:
+                status_display = {
+                'pending': 'Pending Approval',
+                'active': 'Active',
+                'paid': 'Paid Off',
+                'defaulted': 'Defaulted',
+                'rejected': 'Rejected'
+            }.get(loan.status, loan.status)
+                response += (
+                    f"- {loan.product.loanType}:\n"
+                    f"  Amount: NPR {loan.amount:,.2f}\n"
+                    f"  Outstanding: NPR {loan.outstanding:,.2f}\n"
+                    f"  Interest: {loan.interest_rate}%\n"
+                    f"  Next Payment: {loan.next_payment_date}\n"
+                )
+            return response
+        
+        except Exception as e:
+            logger.error(f"Loan status error: {str(e)}")
+            return "Unable to retrieve your loan information."
+    
+    def _get_specific_loan_info(self, query: str) -> str:
+        """Get details for a specific loan type"""
+        for product in Loans.objects.filter(is_active=True):
+            if product.loanType.lower() in query:
+                return (
+                    f"{product.loanType} Details:\n"
+                    f"- Rate: {product.interestRate}%\n"
+                    f"- Amount: NPR {product.minAmount:,.2f} to {product.maxAmount:,.2f}\n"
+                    f"- Term: {product.minTerm} to {product.maxTerm} months\n"
+                    f"Apply with just your citizenship certificate!"
+                )
+        return "Could not find that loan product."
+    
+    def _handle_interest_rate_question(self, query: str) -> str:
+        """Handle interest rate queries"""
+        if "for" in query:  # Specific loan type
+            for product in Loans.objects.filter(is_active=True):
+                if product.loanType.lower() in query:
+                    return f"Our {product.loanType} has an interest rate of {product.interestRate}%."
+        
+        # General interest rates
+        rates = [f"{p.loanType}: {p.interestRate}%" for p in Loans.objects.filter(is_active=True)]
+        return "Current interest rates:\n" + "\n".join(rates)
+    
+    def _get_loan_help_message(self) -> str:
+        """Default loan help message"""
+        return (
+            "I can help with:\n"
+            "- Types of loans we offer\n"
+            "- Your loan status\n"
+            "- Interest rates\n"
+            "- EMI calculations\n"
+            "Try asking about a specific loan type like 'home loan'"
+        )
+        
+    def _currency_converter(self, query: str) -> str:
+        """Handle currency conversions with enhanced currency detection"""
+        try:
+            # Extract amount
+            amount_match = re.search(r'(\d+\.?\d*)', query.replace(',', ''))
+            if not amount_match:
+                return "Please specify an amount to convert (e.g., 'convert 1000 Indian rupees to Nepali rupees')"
+            amount = float(amount_match.group(1))
+            
+            # Extract currency names
+            query_lower = query.lower()
+            currencies = []
+            
+            # Try to find both currencies in the query
+            for name, code in self.CURRENCY_MAPPING.items():
+                if name in query_lower:
+                    currencies.append((name, code))
+                    if len(currencies) == 2:
+                        break
+            
+            # Fallback to ISO codes if names not found
+            if len(currencies) < 2:
+                iso_codes = re.findall(r'\b([A-Z]{3})\b', query.upper())
+                currencies.extend([(code, code) for code in iso_codes])
+            
+            if len(currencies) < 2:
+                return (
+                    "Please specify both source and target currencies.\n"
+                    "Examples:\n"
+                    "- 'convert 1000 Indian rupees to Nepali rupees'\n"
+                    "- 'change 500 USD to NPR'\n"
+                    "Supported currencies: Indian rupee (INR), Nepali rupee (NPR), US dollar (USD), Euro (EUR), Pound (GBP)"
+                )
+            
+            from_currency = currencies[0][1]
+            to_currency = currencies[1][1]
+            
+            # Get conversion from API
+            today = datetime.date.today().isoformat()
+            conversion = CurrencyExchange.convert_currency(
+                amount=amount,
+                date=today,
+                from_currency=from_currency,
+                to_currency=to_currency
+            )
+            
+            if conversion.get('success'):
                 return (
                     f"Currency Conversion:\n"
-                    f"Amount: {amount} {from_curr}\n"
-                    f"Rate: 1 {from_curr} = {rate:.2f} {to_curr}\n"
-                    f"Result: {converted:.2f} {to_curr}"
+                    f"Amount: {amount} {from_currency}\n"
+                    f"Rate: 1 {from_currency} = {conversion['exchange_rate']:.4f} {to_currency}\n"
+                    f"Result: {conversion['converted_amount']:.2f} {to_currency}\n"
+                    f"Source: NRB Forex API (Today's rate)"
                 )
-            return "Please specify amount and currencies (e.g., 'convert 100 USD to EUR')"
+            
+            # Fallback to direct rate calculation if API conversion fails
+            rate = self._get_exchange_rate(from_currency, to_currency)
+            converted = amount * rate
+            return (
+                f"Currency Conversion (using cached rates):\n"
+                f"Amount: {amount} {from_currency}\n"
+                f"Rate: 1 {from_currency} = {rate:.4f} {to_currency}\n"
+                f"Result: {converted:.2f} {to_currency}\n"
+                f"Note: Using fallback rates as API unavailable"
+            )
+            
         except Exception as e:
-            logger.error(f"Conversion error: {str(e)}")
-            return "Unable to perform conversion"
-    
+            logger.error(f"Currency conversion error: {str(e)}")
+            return "Unable to perform conversion. Please try again later."
+        
     def _get_exchange_rate(self, from_curr: str, to_curr: str) -> float:
-        """Mock exchange rate service"""
-        rates = {
-            "USD_NPR": 133.50,
-            "EUR_NPR": 145.25,
-            "GBP_NPR": 170.80,
-            "NPR_USD": 1/133.50,
-            "NPR_EUR": 1/145.25,
-            "NPR_GBP": 1/170.80
-        }
-        return rates.get(f"{from_curr}_{to_curr}", 1.0)
+        """Get real-time exchange rate from NRB API"""
+        try:
+            from_curr = from_curr.upper()
+            to_curr = to_curr.upper()
+            
+            # Handle NPR conversions (NPR is the base currency in NRB API)
+            if from_curr == to_curr:
+                return 1.0
+                
+            today = datetime.date.today().isoformat()
+            
+            # Get conversion data from API
+            conversion = CurrencyExchange.convert_currency(
+                amount=1,
+                date=today,
+                from_currency=from_curr,
+                to_currency=to_curr
+            )
+            
+            if conversion.get('success'):
+                return conversion['exchange_rate']
+                
+            # Fallback to cached rates if API fails
+            cached_rates = {
+                "USD_NPR": 133.50,
+                "EUR_NPR": 145.25,
+                "GBP_NPR": 170.80,
+                "NPR_USD": 1/133.50,
+                "NPR_EUR": 1/145.25,
+                "NPR_GBP": 1/170.80
+            }
+            return cached_rates.get(f"{from_curr}_{to_curr}", 1.0)
+            
+        except Exception as e:
+            logger.error(f"Exchange rate API error: {str(e)}")
+            return 1.0  # Safe fallback
     
     def process_query(self, query: str) -> BankingResponse:
-        """Main entry point for query processing"""
+        """Main entry point with enhanced currency conversion handling"""
         try:
+            query_lower = query.lower()
             query_type = self.classifier.classify(query)
             logger.debug(f"Classified '{query}' as {query_type}")
-            
+            print("Process Query",query)
+
+    
+            # Special handling for currency conversions
+            if (query_type == QueryType.CALCULATIONS and 
+                any(term in query_lower for term in ['convert', 'exchange', 'change'])):
+                response = self._currency_converter(query)
+                return BankingResponse(
+                    query=query,
+                    type=QueryType.CALCULATIONS,
+                    response=response,
+                    confidence=0.95,
+                    source="NRB Forex API" if "API" in response else "Cached Rates",
+                    context=self.context.copy()
+                )
+    
+            # Rest of the processing logic...
             if query_type == QueryType.DIRECT:
                 response = self._handle_database_query(query)
             elif query_type == QueryType.STEPS:
                 response = self._generate_steps_response(query)
+            elif query_type == QueryType.CALCULATIONS:
+                response = self._financial_calculator(query)
             else:
                 response = self.agent.invoke({"input": query})["output"]
-            
+    
             self._update_chat_history(query, response)
             return BankingResponse(
                 query=query,
@@ -527,7 +818,7 @@ class BankingAssistant:
                 response="I couldn't process your request.",
                 confidence=0.1
             )
-    
+        
     def _generate_steps_response(self, query: str) -> str:
         """Generate procedural instructions"""
         prompt = f"""Provide clear, numbered steps for this banking request:
