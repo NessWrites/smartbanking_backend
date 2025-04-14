@@ -425,50 +425,48 @@ class Withdraw(models.Model):
         return f"Withdraw {self.withdrawID} - {self.withdrawal_type} - {self.transaction.reference}"
 
 class CurrencyExchange:
-
     """
-    Handles currency exchange operations using NRB API with caching.
+    Handles currency exchange operations using NRB API.
     """
     BASE_URL = "https://www.nrb.org.np/api/forex/v1/rates"
-    CACHE_TIMEOUT = 3600  # 1 hour cache
     
+    # Define unit factors for currencies where rates are not per 1 unit
+    UNIT_FACTORS = {
+        "INR": 100,  # Rates are for 100 units
+        "JPY": 10,   # Rates are for 10 units
+        "KRW": 100   # Rates are for 100 units
+    }
+
     @classmethod
     def get_exchange_rate(cls, date, currency):
         """
-        Fetches exchange rate with caching.
+        Fetches exchange rate for the given date and currency from NRB API.
+        Returns buy/sell rates for the currency against NPR, normalized to 1 unit.
         """
-        cache_key = f"exchange_rate_{date}_{currency}"
-        cached_data = cache.get(cache_key)
-        if cached_data:
-            return cached_data
-            
-        try:
-            params = {
-                "from": date,
-                "to": date,
-                "per_page": 50,
-                "page": 1
-            }
-            
-            response = requests.get(cls.BASE_URL, params=params, timeout=5)
-            response.raise_for_status()
-            data = response.json()
-            
-            if data["status"]["code"] == 200:
-                for rate_info in data["data"]["payload"]:
-                    for rate in rate_info["rates"]:
-                        if rate["currency"]["iso3"] == currency:
-                            result = {
-                                "buy": float(rate["buy"]),
-                                "sell": float(rate["sell"])
-                            }
-                            cache.set(cache_key, result, cls.CACHE_TIMEOUT)
-                            return result
-            return None
-            
-        except requests.RequestException as e:
-            logger.error(f"NRB API request failed: {str(e)}")
-            return None
+        params = {
+            "from": date,
+            "to": date,
+            "per_page": 50,
+            "page": 1
+        }
+
+        response = requests.get(cls.BASE_URL, params=params)
+        data = response.json()
+
+        if data["status"]["code"] == 200:
+            for rate_info in data["data"]["payload"]:
+                for rate in rate_info["rates"]:
+                    if rate["currency"]["iso3"] == currency:
+                        buy_rate = float(rate["buy"])
+                        sell_rate = float(rate["sell"])
+                        
+                        # Adjust rates to per 1 unit if currency has a unit factor
+                        unit_factor = cls.UNIT_FACTORS.get(currency, 1)  # Default to 1 if not specified
+                        return {
+                            "buy": buy_rate / unit_factor,   # Normalize to NPR per 1 unit
+                            "sell": sell_rate / unit_factor  # Normalize to NPR per 1 unit
+                        }
+        return None
 
     @classmethod
     def convert_currency(cls, amount, date, from_currency, to_currency):
@@ -510,8 +508,7 @@ class CurrencyExchange:
             }
         
         return {"success": False, "error": "Exchange rate not available"}
-    
-    
+
 class ChatConversation(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     question = models.TextField()

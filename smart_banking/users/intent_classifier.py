@@ -67,28 +67,33 @@ class QueryClassifier:
                 re.compile(r'\b(requirements?|criteria|eligibility|documents? needed|papers? required|what (do|does) i need)\b', re.IGNORECASE),
             ],
             QueryType.CALCULATIONS: [
-                re.compile(r'calculat(e|ion)', re.IGNORECASE),
+            re.compile(r'calculat(e|ion)', re.IGNORECASE),
                 re.compile(r'comput(e|ation)', re.IGNORECASE),
-                re.compile(r'convert', re.IGNORECASE),
-                re.compile(r'\d+\s*%\s+of\s+\d+', re.IGNORECASE),
-                re.compile(r'emi', re.IGNORECASE),
+                re.compile(r'\bemi\b', re.IGNORECASE), # Moved EMI up
+
+                # --- NEW/Enhanced Currency/Rate Patterns ---
+                re.compile(r'\b(convert|exchange|change)\b', re.IGNORECASE), # Explicit conversion actions
+                re.compile(r'\b(foreign\s+exchange|forex|currency)\s+rate(s)?\b', re.IGNORECASE), # Asking for rates
+                re.compile(r'\b(rate(s)?\s+(for|of|between))\b', re.IGNORECASE), # More rate phrasings
+                re.compile(r'how\s+much\s+.*?\s+(is|in)\s+.*?', re.IGNORECASE), # How much X is Y / How much X in Y
+                re.compile(r'\d+\s*(dollar|euro|pound|yen|rupee|usd|eur|gbp|jpy|inr|npr)s?\s+(to|in|into)', re.IGNORECASE), # Specific conversion format N CUR to/in...
+                re.compile(r'(to|in|into)\s+\d+\s*(dollar|euro|pound|yen|rupee|usd|eur|gbp|jpy|inr|npr)s?', re.IGNORECASE), # Specific conversion format ...to/in N CUR
+                re.compile(r'\b(usd|eur|gbp|jpy|inr|npr)\s+(to|in|into)\s+(usd|eur|gbp|jpy|inr|npr)\b', re.IGNORECASE), # CUR to CUR
+
+                # Existing patterns (refined slightly)
+                re.compile(r'\d+\s*%\s+of\s+\d+', re.IGNORECASE), # Percentage calculation
                 re.compile(r'installment interest', re.IGNORECASE),
                 re.compile(r'next (payment|installment)', re.IGNORECASE),
                 re.compile(r'how much interest', re.IGNORECASE),
-                re.compile(r'\d+\s*(month|year)s?\s+at\s+\d+%', re.IGNORECASE),
-                re.compile(r'next (interest|installment|payment)', re.IGNORECASE),
+                re.compile(r'\d+\s*(month|year)s?\s+at\s+\d+%', re.IGNORECASE), # Loan term/rate format
+                re.compile(r'next (interest|installment|payment)', re.IGNORECASE), # Duplicates removed
                 re.compile(r'(upcoming|next month\'?s?) interest', re.IGNORECASE),
-                re.compile(r'exchange \d+', re.IGNORECASE),
-                re.compile(r'\d+\s*(rupee|dollar|euro|pound)s? to', re.IGNORECASE),
-                re.compile(r'change \d+\s*\w+\s*to', re.IGNORECASE),
-                re.compile(r'how much (is|are) \d+', re.IGNORECASE),
-                re.compile(r'(change|convert|exchange)\s*\d+\s*\w+\s*(to|into|in)', re.IGNORECASE),
-                re.compile(r'\d+\s*(rupee|dollar|euro|pound)s? (to|into|in)', re.IGNORECASE)
             ],
             "OFF_TOPIC": [
                 re.compile(r'\b(trump|biden|politics|sports|weather|movie)\b', re.IGNORECASE),
                 re.compile(r'^who (is|are)', re.IGNORECASE),
-                re.compile(r'^what is', re.IGNORECASE)
+                re.compile(r'^what is', re.IGNORECASE),
+                re.compile(r'^what is\s+(a|an|the)\s+(?!exchange|currency|forex|interest|rate|emi|loan)', re.IGNORECASE), # Avoid banking terms
             ]
         }
 
@@ -99,18 +104,42 @@ class QueryClassifier:
             'transfer', 'money', 'currency', 'bank', 'deposit', 'payment',
             'withdrawal', 'foreign exchange', 'currency'
         }
+        query_lower = query.lower()
         # Check for off-topic patterns first
         if any(pattern.search(query) for pattern in self.pattern_map["OFF_TOPIC"]):
-            return False
-        return any(keyword in query.lower() for keyword in banking_keywords)
+            if not any(keyword in query_lower for keyword in self._get_banking_keywords()):
+                 logger.debug(f"Query matched OFF_TOPIC pattern and lacks banking keywords: {query}")
+                 return False
 
+        return any(keyword in query.lower() for keyword in banking_keywords)
+    def _get_banking_keywords(self) -> set:
+         """Centralized list of banking keywords"""
+         return {
+            'balance', 'account', 'loan', 'transaction', 'interest', 'emi',
+            'transfer', 'money', 'currency', 'bank', 'deposit', 'payment',
+            'withdrawal', 'foreign exchange', 'forex', 'rate', 'convert',
+            'exchange', 'usd', 'npr', 'inr', 'eur', 'gbp', # Add common currency codes
+            'statement', 'apply', 'eligibility', 'credit', 'debit', 'fund'
+        }
     def _pattern_match(self, query: str) -> Optional[QueryType]:
-        """Match query against predefined patterns"""
-        for query_type, patterns in self.pattern_map.items():
-            if query_type == "OFF_TOPIC":
-                continue
-            if any(pattern.search(query) for pattern in patterns):
-                return query_type
+        # Check CALCULATIONS first for currency conversions
+        for pattern in self.pattern_map[QueryType.CALCULATIONS]:
+            if pattern.search(query):
+                logger.debug(f"Matched CALCULATIONS pattern {pattern.pattern} for query: {query}")
+                return QueryType.CALCULATIONS
+        
+        # Then check DIRECT
+        for pattern in self.pattern_map[QueryType.DIRECT]:
+            if pattern.search(query):
+                logger.debug(f"Matched DIRECT pattern {pattern.pattern} for query: {query}")
+                return QueryType.DIRECT
+        
+        # Finally check STEPS
+        for pattern in self.pattern_map[QueryType.STEPS]:
+            if pattern.search(query):
+                logger.debug(f"Matched STEPS pattern {pattern.pattern} for query: {query}")
+                return QueryType.STEPS
+        
         return None
 
     def classify(self, query: str) -> QueryType:
@@ -120,29 +149,54 @@ class QueryClassifier:
         
         try:
             query_lower = query.lower()
+            calc_keywords = ['calculate', 'computation', 'convert', 'exchange', 'change', 'emi', 'rate', 'forex', 'foreign exchange', 'how much']
+            currency_indicators = ['rupee','rupees', 'npr', 'inr', 'npr', 'dollar', 'euro', 'pound', 'yen', 'usd', 'eur', 'gbp', 'jpy', '%', 'interest']
+            contains_number = re.search(r'\d', query)
             
-            # Enhanced currency conversion detection
-            if any(term in query_lower for term in ['convert', 'exchange', 'change']):
-                # Check for currency indicators in the query
-                currency_indicators = ['rupee', 'inr', 'npr', 'dollar', 'euro', 'pound', 'rs', 'रू', 'to', 'into']
-                if any(indicator in query_lower for indicator in currency_indicators):
-                    return QueryType.CALCULATIONS
-                    
-            # Then try the normal pattern matching
+            is_likely_calculation = False
+            if any(term in query_lower for term in calc_keywords):
+                # If keywords like convert/exchange/rate/emi are present, it's highly likely a calculation
+                if any(term in query_lower for term in ['convert', 'exchange', 'change', 'rate', 'emi', 'forex', 'calculate', 'computation']):
+                     is_likely_calculation = True
+                     logger.debug(f"Strong CALCULATION keyword detected: {query}")
+                # If "how much" is present with numbers or currency indicators, lean towards calculation
+                elif 'how much' in query_lower and (contains_number or any(ind in query_lower for ind in currency_indicators)):
+                     is_likely_calculation = True
+                     logger.debug(f"'how much' + indicators points to CALCULATION: {query}")
+
+            # If keywords + indicators are present, also likely calculation
+            elif contains_number and any(ind in query_lower for ind in currency_indicators):
+                 is_likely_calculation = True
+                 logger.debug(f"Numbers + currency indicators point to CALCULATION: {query}")
+
+
+            if is_likely_calculation:
+                 # Try pattern matching for CALCULATION first for confirmation/specificity
+                 for pattern in self.pattern_map[QueryType.CALCULATIONS]:
+                    if pattern.search(query):
+                        logger.debug(f"Confirmed CALCULATIONS via pattern {pattern.pattern} after keyword check: {query}")
+                        return QueryType.CALCULATIONS
+                 # If keywords strongly suggested calculation, but no specific pattern matched, classify as CALCULATION anyway
+                 logger.debug(f"Classifying as CALCULATIONS based on keyword/indicator logic, despite no specific pattern match: {query}")
+                 return QueryType.CALCULATIONS
+            # --- End Enhanced Check ---
+
+
+            # If not strongly identified as calculation, proceed with normal pattern matching order
             query_type = self._pattern_match(query)
             if query_type:
+                logger.debug(f"Pattern match result (after enhanced check): {query_type}")
                 return query_type
-                
-            # Default fallback based on content
-            if any(term in query_lower for term in ['calculate', 'how much', 'what is']):
-                return QueryType.CALCULATIONS
-                
-            return QueryType.DIRECT  # Final fallback
-            
+
+            # Final fallback if no patterns matched
+            # If it contains numbers, maybe it's a calculation missed? Or direct (e.g., account number)? Defaulting to DIRECT is safer.
+            logger.debug(f"No specific patterns matched, falling back to DIRECT for query: {query}")
+            return QueryType.DIRECT
+
         except Exception as e:
-            logger.error(f"Classification error: {str(e)}")
-            return QueryType.STEPS  # Safe fallback
-    
+            logger.error(f"Classification error for query '{query}': {str(e)}", exc_info=True)
+            return QueryType.STEPS  # Safe fallback in case of unexpected errors
+
 class BankingAssistant:
     """Main banking assistant class with context-aware capabilities"""
     
@@ -769,28 +823,34 @@ class BankingAssistant:
             query_type = self.classifier.classify(query)
             logger.debug(f"Classified '{query}' as {query_type}")
             print("Process Query",query)
+            
+             # 2. Handle based on the determined query type (NO override needed here anymore)
+            response_str = ""
+            source = "Agent/LLM" # Default source
 
     
-            # Special handling for currency conversions
-            if (query_type == QueryType.CALCULATIONS and 
-                any(term in query_lower for term in ['convert', 'exchange', 'change'])):
-                response = self._currency_converter(query)
-                return BankingResponse(
-                    query=query,
-                    type=QueryType.CALCULATIONS,
-                    response=response,
-                    confidence=0.95,
-                    source="NRB Forex API" if "API" in response else "Cached Rates",
-                    context=self.context.copy()
-                )
+            # Force CALCULATIONS for currency queries, even if misclassified
+            if any(term in query_lower for term in ['convert', 'exchange', 'change']):
+                if any(indicator in query_lower for indicator in ['rupee', 'inr', 'npr', 'dollar', 'usd', 'euro', 'eur', 'pound', 'gbp']):
+                    query_type = QueryType.CALCULATIONS
+                    logger.debug(f"Overriding to CALCULATIONS for query: {query}")
     
-            # Rest of the processing logic...
-            if query_type == QueryType.DIRECT:
+            # Handle based on query type
+            if query_type == QueryType.CALCULATIONS:
+                
+                # Check if it's currency conversion or other financial calculation
+                if any(term in query.lower() for term in ['convert', 'exchange', 'change', 'rate', 'forex', 'foreign exchange']) or \
+                   any(code in query.upper() for code in ['USD', 'EUR', 'GBP', 'JPY', 'INR', 'NPR']): # Check common codes too
+                    response_str = self._currency_converter(query)
+                    source = "CurrencyConverter Tool"
+                else:
+                    response_str = self._financial_calculator(query) # Assuming this routes EMI, interest etc.
+                    source = "FinancialCalculator Tool"
+            elif query_type == QueryType.DIRECT:
                 response = self._handle_database_query(query)
+                print("**********************i am here or not but this is getting out ofhands")
             elif query_type == QueryType.STEPS:
                 response = self._generate_steps_response(query)
-            elif query_type == QueryType.CALCULATIONS:
-                response = self._financial_calculator(query)
             else:
                 response = self.agent.invoke({"input": query})["output"]
     
