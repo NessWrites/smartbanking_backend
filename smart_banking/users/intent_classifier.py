@@ -46,32 +46,25 @@ class QueryClassifier:
         """Initialize pre-compiled regex patterns"""
         
         self.pattern_map = {
-            QueryType.STEPS: [
-                re.compile(r'how to', re.IGNORECASE),
-                re.compile(r'steps to', re.IGNORECASE),
-                re.compile(r'process (to|for)', re.IGNORECASE),
-                re.compile(r'what (do|should) i do to', re.IGNORECASE),
-                re.compile(r'way to', re.IGNORECASE),
-                re.compile(r'about', re.IGNORECASE),
-                
-            ],
-            QueryType.DIRECT: [
-                re.compile(r'\b(my|check|view|show)\s+(balance|transactions?|loans?)\b', re.IGNORECASE),
-                re.compile(r'\b(account\s+statement|loan\s+status)\b', re.IGNORECASE),
-                re.compile(r'\btypes?\s+of\s+loans?\b', re.IGNORECASE),
-                re.compile(r'\b(tell me more|details?)\s+about\b', re.IGNORECASE),
-                re.compile(r'\binterest\s+rate(s)?\b', re.IGNORECASE),
-                re.compile(r'\b(send|transfer)\s+money\b', re.IGNORECASE),
-                re.compile(r'\b(criteria|requirements|eligibility|necessary|need|required)\s+(for|to)\s+(loan|education loan|personal loan)\b', re.IGNORECASE),
-                re.compile(r'\bwhat (do|should) i need (for|to get)\s+(a|an)\s+loan\b', re.IGNORECASE),
-                re.compile(r'\b(requirements?|criteria|eligibility|documents? needed|papers? required|what (do|does) i need)\b', re.IGNORECASE),
-            ],
             QueryType.CALCULATIONS: [
             re.compile(r'calculat(e|ion)', re.IGNORECASE),
                 re.compile(r'comput(e|ation)', re.IGNORECASE),
                 re.compile(r'\bemi\b', re.IGNORECASE), # Moved EMI up
+                # Move interest/installment patterns to top
+                re.compile(r'\b(next|upcoming)\s+(month\'?s?)?\s*(interest|installment|payment)\b', re.IGNORECASE),
+                re.compile(r'\b(how much|what is)\s+(my|the)\s+(next|upcoming)\s+interest\b', re.IGNORECASE),
+                re.compile(r'\b(calculate|compute)\s+(next|upcoming)\s+interest\b', re.IGNORECASE),
+                re.compile(r'installment interest', re.IGNORECASE),
+                re.compile(r'next (payment|installment)', re.IGNORECASE),
+                re.compile(r'how much interest', re.IGNORECASE),
+            
+                # Keep other calculation patterns
+                re.compile(r'calculat(e|ion)', re.IGNORECASE),
+                re.compile(r'comput(e|ation)', re.IGNORECASE),
+                re.compile(r'\bemi\b', re.IGNORECASE),
 
                 # --- NEW/Enhanced Currency/Rate Patterns ---
+                re.compile(r'\b(what is\s+the\s+)?exchange\s+rate(s)?\b', re.IGNORECASE),  # Added for exchange rate queries
                 re.compile(r'\b(convert|exchange|change)\b', re.IGNORECASE), # Explicit conversion actions
                 re.compile(r'\b(foreign\s+exchange|forex|currency)\s+rate(s)?\b', re.IGNORECASE), # Asking for rates
                 re.compile(r'\b(rate(s)?\s+(for|of|between))\b', re.IGNORECASE), # More rate phrasings
@@ -88,7 +81,32 @@ class QueryClassifier:
                 re.compile(r'\d+\s*(month|year)s?\s+at\s+\d+%', re.IGNORECASE), # Loan term/rate format
                 re.compile(r'next (interest|installment|payment)', re.IGNORECASE), # Duplicates removed
                 re.compile(r'(upcoming|next month\'?s?) interest', re.IGNORECASE),
+                re.compile(r'\b(what is|calculate|how much)\s+my\s+interest\s+for\s+next\s+month\b', re.IGNORECASE),
+                re.compile(r'\binterest\s+for\s+next\s+month\b', re.IGNORECASE),
             ],
+            
+            QueryType.STEPS: [
+                re.compile(r'how to', re.IGNORECASE),
+                re.compile(r'steps to', re.IGNORECASE),
+                re.compile(r'process (to|for)', re.IGNORECASE),
+                re.compile(r'what (do|should) i do to', re.IGNORECASE),
+                re.compile(r'way to', re.IGNORECASE),
+                re.compile(r'about', re.IGNORECASE),
+                re.compile(r'\binsurance\b', re.IGNORECASE), 
+                
+            ],
+            QueryType.DIRECT: [
+                re.compile(r'\b(my|check|view|show)\s+(balance|transactions?|loans?)\b', re.IGNORECASE),
+                re.compile(r'\b(account\s+statement|loan\s+status)\b', re.IGNORECASE),
+                re.compile(r'\btypes?\s+of\s+loans?\b', re.IGNORECASE),
+                re.compile(r'\b(tell me more|details?)\s+about\b', re.IGNORECASE),
+                re.compile(r'\binterest\s+rate(s)?\b', re.IGNORECASE),
+                re.compile(r'\b(send|transfer)\s+money\b', re.IGNORECASE),
+                re.compile(r'\b(criteria|requirements|eligibility|necessary|need|required)\s+(for|to)\s+(loan|education loan|personal loan)\b', re.IGNORECASE),
+                re.compile(r'\bwhat (do|should) i need (for|to get)\s+(a|an)\s+loan\b', re.IGNORECASE),
+                re.compile(r'\b(requirements?|criteria|eligibility|documents? needed|papers? required|what (do|does) i need)\b', re.IGNORECASE),
+            ],
+            
             "OFF_TOPIC": [
                 re.compile(r'\b(trump|biden|politics|sports|weather|movie)\b', re.IGNORECASE),
                 re.compile(r'^who (is|are)', re.IGNORECASE),
@@ -99,27 +117,35 @@ class QueryClassifier:
 
     def _is_banking_related(self, query: str) -> bool:
         """Check if query is banking-related"""
-        banking_keywords = {
-            'balance', 'account', 'loan', 'transaction', 'interest', 'emi', 
-            'transfer', 'money', 'currency', 'bank', 'deposit', 'payment',
-            'withdrawal', 'foreign exchange', 'currency'
-        }
+        banking_keywords = self._get_banking_keywords()
         query_lower = query.lower()
-        # Check for off-topic patterns first
+        
+        # Explicitly allow currency conversion queries
+        currency_indicators = {'convert', 'exchange', 'change', 'currency', 'forex', 'rate', 
+                             'usd', 'npr', 'inr', 'eur', 'gbp', 'jpy', 'rupee', 'dollar', 'euro', 'pound', 'yen'}
+        if any(indicator in query_lower for indicator in currency_indicators):
+            logger.debug(f"Query recognized as banking-related due to currency indicators: {query}")
+            return True
+        
+        # Check for off-topic patterns
         if any(pattern.search(query) for pattern in self.pattern_map["OFF_TOPIC"]):
-            if not any(keyword in query_lower for keyword in self._get_banking_keywords()):
-                 logger.debug(f"Query matched OFF_TOPIC pattern and lacks banking keywords: {query}")
-                 return False
-
-        return any(keyword in query.lower() for keyword in banking_keywords)
+            if not any(keyword in query_lower for keyword in banking_keywords):
+                logger.debug(f"Query matched OFF_TOPIC pattern and lacks banking keywords: {query}")
+                return False
+        
+        # General banking keyword check
+        is_related = any(keyword in query_lower for keyword in banking_keywords)
+        logger.debug(f"Banking-related check for '{query}': {is_related}")
+        return is_related
+    
     def _get_banking_keywords(self) -> set:
-         """Centralized list of banking keywords"""
-         return {
+        """Centralized list of banking keywords"""
+        return {
             'balance', 'account', 'loan', 'transaction', 'interest', 'emi',
             'transfer', 'money', 'currency', 'bank', 'deposit', 'payment',
             'withdrawal', 'foreign exchange', 'forex', 'rate', 'convert',
-            'exchange', 'usd', 'npr', 'inr', 'eur', 'gbp', # Add common currency codes
-            'statement', 'apply', 'eligibility', 'credit', 'debit', 'fund'
+            'exchange', 'usd', 'npr', 'inr', 'eur', 'gbp', 'jpy', 'statement',
+            'apply', 'eligibility', 'credit', 'debit', 'fund'
         }
     def _pattern_match(self, query: str) -> Optional[QueryType]:
         # Check CALCULATIONS first for currency conversions
@@ -144,11 +170,27 @@ class QueryClassifier:
 
     def classify(self, query: str) -> QueryType:
         """Classify query with robust error handling and improved currency detection"""
+        
+        
         if not self._is_banking_related(query):
             raise ValueError("This query is not related to banking.")
         
         try:
             query_lower = query.lower()
+            # First check for specific interest calculation patterns
+            interest_phrases = [
+                'next interest',
+                'next month interest',
+                'upcoming interest',
+                'installment interest',
+                'next payment interest',
+                'how much interest will i pay'
+            ]
+            
+            if any(phrase in query_lower for phrase in interest_phrases):
+                logger.debug(f"Matched interest calculation pattern for query: {query}")
+                return QueryType.CALCULATIONS
+            
             calc_keywords = ['calculate', 'computation', 'convert', 'exchange', 'change', 'emi', 'rate', 'forex', 'foreign exchange', 'how much']
             currency_indicators = ['rupee','rupees', 'npr', 'inr', 'npr', 'dollar', 'euro', 'pound', 'yen', 'usd', 'eur', 'gbp', 'jpy', '%', 'interest']
             contains_number = re.search(r'\d', query)
@@ -330,6 +372,8 @@ class BankingAssistant:
             'next interest', 
             'installment interest',
             'payment interest',
+            'next month interest',
+            'interest for next month',
             'next month interest'
         ]):
             return self._calculate_installment_interest(query)
@@ -489,25 +533,26 @@ class BankingAssistant:
         )
     
     def _financial_calculator(self, query: str) -> str:
-        """Handle financial calculations"""
+        """Handle financial calculations using database data for loan interest queries"""
         try:
             query_lower = query.lower()
+            logger.debug(f"Financial calculator input query: {query}, matched terms: {query_lower}")
             
-            # Handle installment interest queries
+            # Handle installment interest queries using database data
             if any(term in query_lower for term in [
-                'next interest', 
+                'next interest',
                 'next installment',
                 'next payment',
                 'upcoming interest',
-                'how much interest will i pay'
+                'how much interest will i pay',
+                'installment interest',
+                'interest for next month',  # Added for queries like "calculate my interest for next month"
+                'next month interest',
+                'interest next month'
             ]):
                 return self._calculate_installment_interest(query)
             
-            # Handle installment interest queries
-            if any(term in query_lower for term in ['installment interest', 'next interest']):
-                return self._calculate_installment_interest(query)
-                
-            # Extract numbers from query
+            # Extract numbers for explicit calculations
             amounts = [float(x) for x in re.findall(r'\d+\.?\d*', query)]
             
             # Try to get rate if specified with % sign
@@ -529,22 +574,22 @@ class BankingAssistant:
                 if len(amounts) >= 2:
                     return self._calculate_interest(amounts)
                 return (
-                    "Please provide:\n"
-                    "1. Principal amount\n"
-                    "2. Interest rate\n"
-                    "Optionally: Time period in years"
+                    "Please provide for manual interest calculation:\n"
+                    "1. Principal amount (e.g., 50000)\n"
+                    "2. Interest rate (e.g., 8%)\n"
+                    "Or try 'calculate my next month interest' for your loan details."
                 )
                 
             return (
                 "I can help with:\n"
                 "- EMI calculations (say 'calculate EMI for 100000 at 10% for 24 months')\n"
                 "- Interest calculations (say 'calculate interest on 50000 at 8%')\n"
-                "- Next installment interest (say 'what's my next interest payment')"
+                "- Loan interest (say 'calculate my next month interest')"
             )
             
         except Exception as e:
             logger.error(f"Calculation error: {str(e)}")
-            return "Unable to perform calculation. Please provide clear numbers and what to calculate."
+            return "Unable to perform calculation. Please provide clear numbers or try 'calculate my next month interest'."
         
     def _calculate_interest(self, amounts) -> str:
         """Calculate simple interest"""
@@ -709,112 +754,110 @@ class BankingAssistant:
         )
         
     def _currency_converter(self, query: str) -> str:
-        """Handle currency conversions with enhanced currency detection"""
+        """Convert currency based on user query, with fallback for API failures"""
         try:
+            query_lower = query.replace(',', '').lower()
+            
             # Extract amount
-            amount_match = re.search(r'(\d+\.?\d*)', query.replace(',', ''))
+            amount_match = re.search(r'(\d+\.?\d*)', query_lower)
             if not amount_match:
-                return "Please specify an amount to convert (e.g., 'convert 1000 Indian rupees to Nepali rupees')"
+                logger.debug(f"No amount found in query: {query}")
+                return "Please specify an amount to convert (e.g., 'convert 100 INR to NPR')"
+            
             amount = float(amount_match.group(1))
+            logger.debug(f"Parsed amount: {amount}")
             
-            # Extract currency names
-            query_lower = query.lower()
-            currencies = []
+            # Initialize currencies
+            from_currency = None
+            to_currency = None
             
-            # Try to find both currencies in the query
-            for name, code in self.CURRENCY_MAPPING.items():
-                if name in query_lower:
-                    currencies.append((name, code))
-                    if len(currencies) == 2:
-                        break
-            
-            # Fallback to ISO codes if names not found
-            if len(currencies) < 2:
-                iso_codes = re.findall(r'\b([A-Z]{3})\b', query.upper())
-                currencies.extend([(code, code) for code in iso_codes])
-            
-            if len(currencies) < 2:
-                return (
-                    "Please specify both source and target currencies.\n"
-                    "Examples:\n"
-                    "- 'convert 1000 Indian rupees to Nepali rupees'\n"
-                    "- 'change 500 USD to NPR'\n"
-                    "Supported currencies: Indian rupee (INR), Nepali rupee (NPR), US dollar (USD), Euro (EUR), Pound (GBP)"
-                )
-            
-            from_currency = currencies[0][1]
-            to_currency = currencies[1][1]
-            
-            # Get conversion from API
-            today = datetime.date.today().isoformat()
-            conversion = CurrencyExchange.convert_currency(
-                amount=amount,
-                date=today,
-                from_currency=from_currency,
-                to_currency=to_currency
-            )
-            
-            if conversion.get('success'):
-                return (
-                    f"Currency Conversion:\n"
-                    f"Amount: {amount} {from_currency}\n"
-                    f"Rate: 1 {from_currency} = {conversion['exchange_rate']:.4f} {to_currency}\n"
-                    f"Result: {conversion['converted_amount']:.2f} {to_currency}\n"
-                    f"Source: NRB Forex API (Today's rate)"
-                )
-            
-            # Fallback to direct rate calculation if API conversion fails
-            rate = self._get_exchange_rate(from_currency, to_currency)
-            converted = amount * rate
-            return (
-                f"Currency Conversion (using cached rates):\n"
-                f"Amount: {amount} {from_currency}\n"
-                f"Rate: 1 {from_currency} = {rate:.4f} {to_currency}\n"
-                f"Result: {converted:.2f} {to_currency}\n"
-                f"Note: Using fallback rates as API unavailable"
-            )
-            
-        except Exception as e:
-            logger.error(f"Currency conversion error: {str(e)}")
-            return "Unable to perform conversion. Please try again later."
-        
-    def _get_exchange_rate(self, from_curr: str, to_curr: str) -> float:
-        """Get real-time exchange rate from NRB API"""
-        try:
-            from_curr = from_curr.upper()
-            to_curr = to_curr.upper()
-            
-            # Handle NPR conversions (NPR is the base currency in NRB API)
-            if from_curr == to_curr:
-                return 1.0
-                
-            today = datetime.date.today().isoformat()
-            
-            # Get conversion data from API
-            conversion = CurrencyExchange.convert_currency(
-                amount=1,
-                date=today,
-                from_currency=from_curr,
-                to_currency=to_curr
-            )
-            
-            if conversion.get('success'):
-                return conversion['exchange_rate']
-                
-            # Fallback to cached rates if API fails
-            cached_rates = {
-                "USD_NPR": 133.50,
-                "EUR_NPR": 145.25,
-                "GBP_NPR": 170.80,
-                "NPR_USD": 1/133.50,
-                "NPR_EUR": 1/145.25,
-                "NPR_GBP": 1/170.80
+            # Currency mapping
+            CURRENCY_MAPPING = {
+                'dollar': 'USD', 'dollars': 'USD', 'usd': 'USD',
+                'rupee': 'NPR', 'rupees': 'NPR', 'nepali rupee': 'NPR', 'npr': 'NPR',
+                'indian rupee': 'INR', 'inr': 'INR',
+                'euro': 'EUR', 'euros': 'EUR', 'eur': 'EUR',
+                'pound': 'GBP', 'pounds': 'GBP', 'gbp': 'GBP',
+                'yen': 'JPY', 'jpy': 'JPY'
             }
-            return cached_rates.get(f"{from_curr}_{to_curr}", 1.0)
+            
+            # Extract currencies
+            words = query_lower.split()
+            for word in words:
+                code = CURRENCY_MAPPING.get(word)
+                if code:
+                    if not from_currency:
+                        from_currency = code
+                    elif not to_currency and code != from_currency:
+                        to_currency = code
+            
+            # Additional check for currency codes
+            currency_codes = ['usd', 'npr', 'inr', 'eur', 'gbp', 'jpy']
+            for word in words:
+                if word in currency_codes:
+                    code = word.upper()
+                    if not from_currency:
+                        from_currency = code
+                    elif not to_currency and code != from_currency:
+                        to_currency = code
+            
+            if not from_currency or not to_currency:
+                logger.debug(f"Failed to parse currencies: from={from_currency}, to={to_currency}")
+                return "Please specify both source and target currencies (e.g., 'convert 100 INR to NPR')"
+            
+            logger.debug(f"Parsed currencies: {from_currency} to {to_currency}")
+            
+            # Get current date
+            from datetime import date
+            today = date.today().isoformat()
+            
+            # Perform conversion
+            try:
+                conversion = CurrencyExchange.convert_currency(
+                    amount=amount,
+                    date=today,
+                    from_currency=from_currency,
+                    to_currency=to_currency
+                )
+                
+                if not conversion.get("success"):
+                    logger.warning(f"Conversion failed: {conversion.get('error')}")
+                    raise ValueError(f"API returned error: {conversion.get('error')}")
+                
+                result = conversion["converted_amount"]
+                rate = conversion["exchange_rate"]
+                source = "NRB Forex API (Today's rate)"
+                
+            except (requests.exceptions.RequestException, ValueError) as e:
+                logger.warning(f"Currency conversion failed for {from_currency}-{to_currency}: {str(e)}")
+                # Fallback rates
+                FALLBACK_RATES = {
+                    ('INR', 'NPR'): 1.6,  # From your context
+                    ('USD', 'NPR'): 133.5,
+                    ('EUR', 'NPR'): 142.0,
+                    ('NPR', 'INR'): 1/1.6,
+                    ('NPR', 'USD'): 1/133.5,
+                    ('NPR', 'EUR'): 1/142.0
+                }
+                rate = FALLBACK_RATES.get((from_currency, to_currency))
+                if rate:
+                    result = amount * rate
+                    source = "Fallback Rate (Indicative)"
+                else:
+                    logger.error(f"No fallback rate available for {from_currency}-{to_currency}")
+                    return f"Sorry, I couldn’t convert {from_currency} to {to_currency}. Please check the currencies and try again."
+            
+            return (
+                f"Currency Conversion:\n"
+                f"Amount: {amount:,.2f} {from_currency}\n"
+                f"Rate: 1 {from_currency} = {rate:,.4f} {to_currency}\n"
+                f"Result: {result:,.2f} {to_currency}\n"
+                f"Source: {source}"
+            )
             
         except Exception as e:
-            logger.error(f"Exchange rate API error: {str(e)}")
-            return 1.0  # Safe fallback
+            logger.error(f"Unexpected currency conversion error: {str(e)}")
+            return f"Sorry, I couldn’t convert {amount:,.2f} {from_currency or 'unknown'} to {to_currency or 'unknown'}. Please try again."
     
     def process_query(self, query: str) -> BankingResponse:
         """Main entry point with enhanced currency conversion handling"""
@@ -822,33 +865,53 @@ class BankingAssistant:
             query_lower = query.lower()
             query_type = self.classifier.classify(query)
             logger.debug(f"Classified '{query}' as {query_type}")
-            print("Process Query",query)
             
-             # 2. Handle based on the determined query type (NO override needed here anymore)
-            response_str = ""
-            source = "Agent/LLM" # Default source
-
+            # Initialize response to ensure it’s always defined
+            response = ""
+            source = "Agent/LLM"  # Default source
     
-            # Force CALCULATIONS for currency queries, even if misclassified
-            if any(term in query_lower for term in ['convert', 'exchange', 'change']):
-                if any(indicator in query_lower for indicator in ['rupee', 'inr', 'npr', 'dollar', 'usd', 'euro', 'eur', 'pound', 'gbp']):
-                    query_type = QueryType.CALCULATIONS
-                    logger.debug(f"Overriding to CALCULATIONS for query: {query}")
+            # Force CALCULATIONS for interest queries
+            interest_phrases = [
+                'next interest',
+                'next month interest',
+                'upcoming interest',
+                'installment interest',
+                'next payment interest',
+                'how much interest will i pay',
+                'interest for next month'
+            ]
+            if any(phrase in query_lower for phrase in interest_phrases):
+                query_type = QueryType.CALCULATIONS
+                logger.debug(f"Overriding to CALCULATIONS for interest query: {query}")
+            
+            # Force CALCULATIONS for currency and exchange rate queries
+            if any(term in query_lower for term in ['convert', 'exchange', 'change', 'rate', 'forex', 'foreign exchange']):
+                query_type = QueryType.CALCULATIONS
+                logger.debug(f"Overriding to CALCULATIONS for currency/rate query: {query}")
     
             # Handle based on query type
             if query_type == QueryType.CALCULATIONS:
-                
-                # Check if it's currency conversion or other financial calculation
-                if any(term in query.lower() for term in ['convert', 'exchange', 'change', 'rate', 'forex', 'foreign exchange']) or \
-                   any(code in query.upper() for code in ['USD', 'EUR', 'GBP', 'JPY', 'INR', 'NPR']): # Check common codes too
-                    response_str = self._currency_converter(query)
-                    source = "CurrencyConverter Tool"
+                if any(term in query_lower for term in ['convert', 'exchange', 'change', 'rate', 'forex', 'foreign exchange']):
+                    if 'rate' in query_lower and not any(indicator in query_lower for indicator in ['rupee', 'inr', 'npr', 'dollar', 'usd', 'euro', 'eur', 'pound', 'gbp']):
+                        # Handle general exchange rate queries
+                        response = self._currency_converter("1 USD to NPR")
+                        source = "CurrencyConverter Tool (Default USD-NPR)"
+                    else:
+                        response = self._currency_converter(query)
+                        source = "CurrencyConverter Tool"
                 else:
-                    response_str = self._financial_calculator(query) # Assuming this routes EMI, interest etc.
+                    response = self._financial_calculator(query)
                     source = "FinancialCalculator Tool"
+                    if "interest" in query_lower and "month" in query_lower and "Unable to perform" in response:
+                        response = self._calculate_installment_interest(query)
+                        source = "FinancialCalculator Tool (Interest Fallback)"
             elif query_type == QueryType.DIRECT:
-                response = self._handle_database_query(query)
-                print("**********************i am here or not but this is getting out ofhands")
+                if 'insurance' in query_lower:
+                    response = "We currently don’t offer insurance services. How else can I assist with your banking needs?"
+                    source = "Custom Response"
+                else:
+                    response = self._handle_database_query(query)
+                    logger.debug("Handling DIRECT query in process_query")
             elif query_type == QueryType.STEPS:
                 response = self._generate_steps_response(query)
             else:
@@ -864,21 +927,32 @@ class BankingAssistant:
             )
             
         except ValueError as ve:
+            if any(term in query.lower() for term in ['convert', 'exchange', 'change', 'inr', 'npr', 'usd', 'eur', 'gbp']):
+                response = "Please specify a currency conversion, e.g., 'convert 100 USD to NPR'."
+            elif 'insurance' in query.lower():
+                response = "We currently don’t offer insurance services. Try asking about loans, accounts, or currency exchange."
+            else:
+                response = "Please specify your banking query, e.g., 'check my balance' or 'convert 100 USD to NPR'."
+            logger.debug(f"ValueError caught for query '{query}': {str(ve)}")
+            self._update_chat_history(query, response)
             return BankingResponse(
                 query=query,
                 type=QueryType.STEPS,
-                response="I'm a banking assistant. How can I help with your banking needs?",
+                response=response,
                 confidence=0.9
             )
         except Exception as e:
             logger.error(f"Processing error: {str(e)}", exc_info=True)
+            response = "I couldn't process your request. Please try again with a specific banking query."
+            self._update_chat_history(query, response)
             return BankingResponse(
                 query=query,
                 type=QueryType.STEPS,
-                response="I couldn't process your request.",
+                response=response,
                 confidence=0.1
             )
-        
+
+    
     def _generate_steps_response(self, query: str) -> str:
         """Generate procedural instructions"""
         prompt = f"""Provide clear, numbered steps for this banking request:
