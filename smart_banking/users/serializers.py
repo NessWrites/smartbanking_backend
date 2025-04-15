@@ -21,10 +21,6 @@ class UserSerializer(serializers.ModelSerializer):
         user.save()  # Save the user
         return user
 
-
-
-
-
 # Admin Serializer
 class AdminSerializer(serializers.ModelSerializer):
     class Meta:

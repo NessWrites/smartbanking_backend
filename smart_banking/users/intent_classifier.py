@@ -757,20 +757,20 @@ class BankingAssistant:
         """Convert currency based on user query, with fallback for API failures"""
         try:
             query_lower = query.replace(',', '').lower()
-            
+
             # Extract amount
             amount_match = re.search(r'(\d+\.?\d*)', query_lower)
             if not amount_match:
                 logger.debug(f"No amount found in query: {query}")
                 return "Please specify an amount to convert (e.g., 'convert 100 INR to NPR')"
-            
+
             amount = float(amount_match.group(1))
             logger.debug(f"Parsed amount: {amount}")
-            
+
             # Initialize currencies
             from_currency = None
             to_currency = None
-            
+
             # Currency mapping
             CURRENCY_MAPPING = {
                 'dollar': 'USD', 'dollars': 'USD', 'usd': 'USD',
@@ -780,7 +780,7 @@ class BankingAssistant:
                 'pound': 'GBP', 'pounds': 'GBP', 'gbp': 'GBP',
                 'yen': 'JPY', 'jpy': 'JPY'
             }
-            
+
             # Extract currencies
             words = query_lower.split()
             for word in words:
@@ -790,7 +790,7 @@ class BankingAssistant:
                         from_currency = code
                     elif not to_currency and code != from_currency:
                         to_currency = code
-            
+
             # Additional check for currency codes
             currency_codes = ['usd', 'npr', 'inr', 'eur', 'gbp', 'jpy']
             for word in words:
@@ -800,17 +800,17 @@ class BankingAssistant:
                         from_currency = code
                     elif not to_currency and code != from_currency:
                         to_currency = code
-            
+
             if not from_currency or not to_currency:
                 logger.debug(f"Failed to parse currencies: from={from_currency}, to={to_currency}")
                 return "Please specify both source and target currencies (e.g., 'convert 100 INR to NPR')"
-            
+
             logger.debug(f"Parsed currencies: {from_currency} to {to_currency}")
-            
+
             # Get current date
             from datetime import date
             today = date.today().isoformat()
-            
+
             # Perform conversion
             try:
                 conversion = CurrencyExchange.convert_currency(
@@ -819,15 +819,15 @@ class BankingAssistant:
                     from_currency=from_currency,
                     to_currency=to_currency
                 )
-                
+
                 if not conversion.get("success"):
                     logger.warning(f"Conversion failed: {conversion.get('error')}")
                     raise ValueError(f"API returned error: {conversion.get('error')}")
-                
+
                 result = conversion["converted_amount"]
                 rate = conversion["exchange_rate"]
                 source = "NRB Forex API (Today's rate)"
-                
+
             except (requests.exceptions.RequestException, ValueError) as e:
                 logger.warning(f"Currency conversion failed for {from_currency}-{to_currency}: {str(e)}")
                 # Fallback rates
@@ -846,7 +846,7 @@ class BankingAssistant:
                 else:
                     logger.error(f"No fallback rate available for {from_currency}-{to_currency}")
                     return f"Sorry, I couldn’t convert {from_currency} to {to_currency}. Please check the currencies and try again."
-            
+
             return (
                 f"Currency Conversion:\n"
                 f"Amount: {amount:,.2f} {from_currency}\n"
@@ -854,7 +854,7 @@ class BankingAssistant:
                 f"Result: {result:,.2f} {to_currency}\n"
                 f"Source: {source}"
             )
-            
+
         except Exception as e:
             logger.error(f"Unexpected currency conversion error: {str(e)}")
             return f"Sorry, I couldn’t convert {amount:,.2f} {from_currency or 'unknown'} to {to_currency or 'unknown'}. Please try again."
@@ -952,7 +952,6 @@ class BankingAssistant:
                 confidence=0.1
             )
 
-    
     def _generate_steps_response(self, query: str) -> str:
         """Generate procedural instructions"""
         prompt = f"""Provide clear, numbered steps for this banking request:
