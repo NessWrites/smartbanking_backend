@@ -44,13 +44,11 @@ class QueryClassifier:
         
     def _initialize_patterns(self):
         """Initialize pre-compiled regex patterns"""
-        
         self.pattern_map = {
             QueryType.CALCULATIONS: [
-            re.compile(r'calculat(e|ion)', re.IGNORECASE),
+                re.compile(r'calculat(e|ion)', re.IGNORECASE),
                 re.compile(r'comput(e|ation)', re.IGNORECASE),
-                re.compile(r'\bemi\b', re.IGNORECASE), # Moved EMI up
-                # Move interest/installment patterns to top
+                re.compile(r'\bemi\b', re.IGNORECASE),
                 re.compile(r'\b(next|upcoming)\s+(month\'?s?)?\s*(interest|installment|payment)\b', re.IGNORECASE),
                 re.compile(r'\b(how much|what is)\s+(my|the)\s+(next|upcoming)\s+interest\b', re.IGNORECASE),
                 re.compile(r'\b(calculate|compute)\s+(next|upcoming)\s+interest\b', re.IGNORECASE),
@@ -58,34 +56,17 @@ class QueryClassifier:
                 re.compile(r'next (payment|installment)', re.IGNORECASE),
                 re.compile(r'how much interest', re.IGNORECASE),
                 re.compile(r'\b(what is|how much)\s+my\s+(interest\s+)?next\s+month\b', re.IGNORECASE),
-            
-                # Keep other calculation patterns
-                re.compile(r'calculat(e|ion)', re.IGNORECASE),
-                re.compile(r'comput(e|ation)', re.IGNORECASE),
-                re.compile(r'\bemi\b', re.IGNORECASE),
-
-                # --- NEW/Enhanced Currency/Rate Patterns ---
-                re.compile(r'\b(what is\s+the\s+)?exchange\s+rate(s)?\b', re.IGNORECASE),  # Added for exchange rate queries
-                re.compile(r'\b(convert|exchange|change)\b', re.IGNORECASE), # Explicit conversion actions
-                re.compile(r'\b(foreign\s+exchange|forex|currency)\s+rate(s)?\b', re.IGNORECASE), # Asking for rates
+                re.compile(r'\b(what is\s+the\s+)?exchange\s+rate(s)?\b', re.IGNORECASE),
+                re.compile(r'\b(convert|exchange|change)\b', re.IGNORECASE),
+                re.compile(r'\b(foreign\s+exchange|forex|currency)\s+rate(s)?\b', re.IGNORECASE),
                 re.compile(r'\b(exchange|currency|forex)\s+rate(s)?\s+(for|of|between)\b', re.IGNORECASE),
-                re.compile(r'how\s+much\s+.*?\s+(is|in)\s+.*?', re.IGNORECASE), # How much X is Y / How much X in Y
-                re.compile(r'\d+\s*(dollar|euro|pound|yen|rupee|usd|eur|gbp|jpy|inr|npr)s?\s+(to|in|into)', re.IGNORECASE), # Specific conversion format N CUR to/in...
-                re.compile(r'(to|in|into)\s+\d+\s*(dollar|euro|pound|yen|rupee|usd|eur|gbp|jpy|inr|npr)s?', re.IGNORECASE), # Specific conversion format ...to/in N CUR
-                re.compile(r'\b(usd|eur|gbp|jpy|inr|npr)\s+(to|in|into)\s+(usd|eur|gbp|jpy|inr|npr)\b', re.IGNORECASE), # CUR to CUR
-
-                # Existing patterns (refined slightly)
-                re.compile(r'\d+\s*%\s+of\s+\d+', re.IGNORECASE), # Percentage calculation
-                re.compile(r'installment interest', re.IGNORECASE),
-                re.compile(r'next (payment|installment)', re.IGNORECASE),
-                re.compile(r'how much interest', re.IGNORECASE),
-                re.compile(r'\d+\s*(month|year)s?\s+at\s+\d+%', re.IGNORECASE), # Loan term/rate format
-                re.compile(r'next (interest|installment|payment)', re.IGNORECASE), # Duplicates removed
-                re.compile(r'(upcoming|next month\'?s?) interest', re.IGNORECASE),
-                re.compile(r'\b(what is|calculate|how much)\s+my\s+interest\s+for\s+next\s+month\b', re.IGNORECASE),
-                re.compile(r'\binterest\s+for\s+next\s+month\b', re.IGNORECASE),
+                re.compile(r'how\s+much\s+.*?\s+(is|in)\s+.*?', re.IGNORECASE),
+                re.compile(r'\d+\s*(dollar|euro|pound|yen|rupee|usd|eur|gbp|jpy|inr|npr)s?\s+(to|in|into)', re.IGNORECASE),
+                re.compile(r'(to|in|into)\s+\d+\s*(dollar|euro|pound|yen|rupee|usd|eur|gbp|jpy|inr|npr)s?', re.IGNORECASE),
+                re.compile(r'\b(usd|eur|gbp|jpy|inr|npr)\s+(to|in|into)\s+(usd|eur|gbp|jpy|inr|npr)\b', re.IGNORECASE),
+                re.compile(r'\d+\s*%\s+of\s+\d+', re.IGNORECASE),
+                re.compile(r'\d+\s*(month|year)s?\s+at\s+\d+%', re.IGNORECASE),
             ],
-            
             QueryType.STEPS: [
                 re.compile(r'how to', re.IGNORECASE),
                 re.compile(r'steps to', re.IGNORECASE),
@@ -93,27 +74,27 @@ class QueryClassifier:
                 re.compile(r'what (do|should) i do to', re.IGNORECASE),
                 re.compile(r'way to', re.IGNORECASE),
                 re.compile(r'about', re.IGNORECASE),
-                re.compile(r'\binsurance\b', re.IGNORECASE), 
-                
+                re.compile(r'\binsurance\b', re.IGNORECASE),
             ],
             QueryType.DIRECT: [
-                re.compile(r'\b(what\s+(are|is)\s+the\s+)?interest\s+rate(s)?\s+(on|for)\s+(loans?|different\s+loans?)\b', re.IGNORECASE),
+                re.compile(r'\b(what\s+(are|is)\s+the\s+)?interest\s+rate(s)?\s+(on|for|available\s+for|of)?\s*(loans?|different\s+loans?)?\b', re.IGNORECASE),  # Updated
                 re.compile(r'\b(my|check|view|show)\s+(balance|transactions?|loans?)\b', re.IGNORECASE),
                 re.compile(r'\b(account\s+statement|loan\s+status)\b', re.IGNORECASE),
                 re.compile(r'\btypes?\s+of\s+loans?\b', re.IGNORECASE),
                 re.compile(r'\b(tell me more|details?)\s+about\b', re.IGNORECASE),
                 re.compile(r'\binterest\s+rate(s)?\b', re.IGNORECASE),
                 re.compile(r'\b(send|transfer)\s+money\b', re.IGNORECASE),
-                re.compile(r'\b(criteria|requirements|eligibility|necessary|need|required)\s+(for|to)\s+(loan|education loan|personal loan)\b', re.IGNORECASE),
+                re.compile(r'\b(criteria|requirements|requirement|eligibility|necessary|need|required)\s+(for|to)\s+(loan|education loan|personal loan)\b', re.IGNORECASE),
                 re.compile(r'\bwhat (do|should) i need (for|to get)\s+(a|an)\s+loan\b', re.IGNORECASE),
-                re.compile(r'\b(requirements?|criteria|eligibility|documents? needed|papers? required|what (do|does) i need)\b', re.IGNORECASE),
+                re.compile(r'\b(requirement|requirements|criteria|eligibility|documents? needed|papers? required)\b', re.IGNORECASE),
+                re.compile(r'\b(minimum|min)\s+(balance|account)\s+(requirement|required|needed)\b', re.IGNORECASE),
+                re.compile(r'\b(what is|what\'?s)\s+(the\s+)?minimum\s+balance\s+(for|to)\s+.*loan\b', re.IGNORECASE),
             ],
-            
             "OFF_TOPIC": [
                 re.compile(r'\b(trump|biden|politics|sports|weather|movie)\b', re.IGNORECASE),
                 re.compile(r'^who (is|are)', re.IGNORECASE),
                 re.compile(r'^what is', re.IGNORECASE),
-                re.compile(r'^what is\s+(a|an|the)\s+(?!exchange|currency|forex|interest|rate|emi|loan)', re.IGNORECASE), # Avoid banking terms
+                re.compile(r'^what is\s+(a|an|the)\s+(?!exchange|currency|forex|interest|rate|emi|loan)', re.IGNORECASE),
             ]
         }
 
@@ -179,23 +160,31 @@ class QueryClassifier:
         return None
 
     def classify(self, query: str) -> QueryType:
-        """Classify query with robust error handling and improved currency detection"""
-        
+        """Classify query with robust error handling, improved currency detection, and LLM-based fallback"""
         
         if not self._is_banking_related(query):
             raise ValueError("This query is not related to banking I can help on banking queries only. Thank you for using our service.")
         
         try:
             query_lower = query.lower()
-                
-                # Force CALCULATIONS for specific interest queries
+            
+            # Force DIRECT for general interest rate queries
+            if 'interest rate' in query_lower or 'interest rates' in query_lower:
+                if not any(phrase in query_lower for phrase in [
+                    'next', 'upcoming', 'month', 'installment', 'payment', 'calculate', 'compute', 'emi', 'how much'
+                ]):
+                    logger.debug(f"Forcing DIRECT for general interest rate query: {query}")
+                    return QueryType.DIRECT
+            
+            # Force CALCULATIONS for specific interest queries
             if any(phrase in query_lower for phrase in [
                 'what is my interest payment', 'interest for next month', 'next month interest',
                 'how much interest will i pay', 'installment interest', 'next payment interest'
             ]):
                 logger.debug(f"Forcing CALCULATIONS for interest query: {query}")
                 return QueryType.CALCULATIONS
-            # First check for specific interest calculation patterns
+            
+            # Check for specific interest calculation patterns
             interest_phrases = [
                 'next interest',
                 'next month interest',
@@ -209,47 +198,58 @@ class QueryClassifier:
                 logger.debug(f"Matched interest calculation pattern for query: {query}")
                 return QueryType.CALCULATIONS
             
+            # Force DIRECT for minimum balance or requirements queries
+            if any(phrase in query_lower for phrase in ['requirement', 'requirements', 'minimum balance', 'min balance']):
+                logger.debug(f"Matched requirements or minimum balance query: {query}")
+                return QueryType.DIRECT
+            
+            # Enhanced currency/calculation detection
             calc_keywords = ['calculate', 'computation', 'convert', 'exchange', 'change', 'emi', 'rate', 'forex', 'foreign exchange', 'how much']
-            currency_indicators = ['rupee','rupees', 'npr', 'inr', 'npr', 'dollar', 'euro', 'pound', 'yen', 'usd', 'eur', 'gbp', 'jpy', '%', 'interest']
+            currency_indicators = ['rupee', 'rupees', 'npr', 'inr', 'dollar', 'euro', 'pound', 'yen', 'usd', 'eur', 'gbp', 'jpy', '%', 'interest']
             contains_number = re.search(r'\d', query)
             
             is_likely_calculation = False
             if any(term in query_lower for term in calc_keywords):
-                # If keywords like convert/exchange/rate/emi are present, it's highly likely a calculation
                 if any(term in query_lower for term in ['convert', 'exchange', 'change', 'rate', 'emi', 'forex', 'calculate', 'computation']):
-                     is_likely_calculation = True
-                     logger.debug(f"Strong CALCULATION keyword detected: {query}")
-                # If "how much" is present with numbers or currency indicators, lean towards calculation
+                    is_likely_calculation = True
+                    logger.debug(f"Strong CALCULATION keyword detected: {query}")
                 elif 'how much' in query_lower and (contains_number or any(ind in query_lower for ind in currency_indicators)):
-                     is_likely_calculation = True
-                     logger.debug(f"'how much' + indicators points to CALCULATION: {query}")
-
-            # If keywords + indicators are present, also likely calculation
+                    is_likely_calculation = True
+                    logger.debug(f"'how much' + indicators points to CALCULATION: {query}")
+            
             elif contains_number and any(ind in query_lower for ind in currency_indicators):
-                 is_likely_calculation = True
-                 logger.debug(f"Numbers + currency indicators point to CALCULATION: {query}")
-
-
+                is_likely_calculation = True
+                logger.debug(f"Numbers + currency indicators point to CALCULATION: {query}")
+            
             if is_likely_calculation:
-                 # Try pattern matching for CALCULATION first for confirmation/specificity
-                 for pattern in self.pattern_map[QueryType.CALCULATIONS]:
+                for pattern in self.pattern_map[QueryType.CALCULATIONS]:
                     if pattern.search(query):
                         logger.debug(f"Confirmed CALCULATIONS via pattern {pattern.pattern} after keyword check: {query}")
                         return QueryType.CALCULATIONS
-                 # If keywords strongly suggested calculation, but no specific pattern matched, classify as CALCULATION anyway
-                 logger.debug(f"Classifying as CALCULATIONS based on keyword/indicator logic, despite no specific pattern match: {query}")
-                 return QueryType.CALCULATIONS
-            # --- End Enhanced Check ---
-
-
-            # If not strongly identified as calculation, proceed with normal pattern matching order
+                logger.debug(f"Classifying as CALCULATIONS based on keyword/indicator logic, despite no specific pattern match: {query}")
+                return QueryType.CALCULATIONS
+            
+            # Proceed with normal pattern matching
             query_type = self._pattern_match(query)
             if query_type:
+                logger.debug(f"Pattern matched query type: {query_type} for query: {query}")
                 return query_type
-            return QueryType.DIRECT
+            
+            # Fallback LLM-based classification
+            logger.debug(f"No pattern matched for query: {query}. Falling back to LLM classification.")
+            prompt = f"Classify this banking query into one of: DIRECT, STEPS, CALCULATIONS\nQuery: {query}\nResponse:"
+            llm_response = self.llm.invoke(prompt).strip().upper()
+            logger.debug(f"LLM classified query '{query}' as: {llm_response}")
+            
+            if llm_response in QueryType.__members__:
+                return QueryType[llm_response]
+            else:
+                logger.warning(f"Invalid LLM response '{llm_response}' for query: {query}. Defaulting to DIRECT.")
+                return QueryType.DIRECT
+                    
         except Exception as e:
             logger.error(f"Classification error for query '{query}': {str(e)}", exc_info=True)
-            return QueryType.STEPS
+            return QueryType.DIRECT
 
 class BankingAssistant:
     """Main banking assistant class with context-aware capabilities"""
@@ -352,14 +352,15 @@ class BankingAssistant:
             return "Please log in to access your account information."
         
         # Route to appropriate handler
-        if "loan" in query_lower:
+        if "loan"  or "interest rate" or "interest rates" in query_lower:
             return self._handle_loan_query(query)
-        elif "transaction" in query_lower:
+        elif "transaction" or "transactions" in query_lower:
             return self._handle_transaction_query(query)
-        elif "balance" in query_lower:
+        elif "balance" or "balances" in query_lower:
             return self._handle_balance_query()
-        elif "account" in query_lower:
+        elif "account" or "accounts" in query_lower:
             return self._handle_account_query()
+
             
         return "I couldn't find that information. Please try being more specific."
 
@@ -372,38 +373,35 @@ class BankingAssistant:
             return self._get_loan_products_list()
         
         # 2. Loan Criteria/Requirements
-        elif any(phrase in query_lower for phrase in ['criteria', 'requirements', 'eligibility', 'necessary', 'need', 'required']):
+        elif any(phrase in query_lower for phrase in [
+            'criteria', 'requirements', 'requirement', 'eligibility', 'necessary', 'need', 'required', 'minimum balance', 'min balance'
+        ]):
             return self._get_loan_criteria(query)
         
-        # 2. Personal Loan Status
+        # 3. Personal Loan Status
         elif any(phrase in query_lower for phrase in ['my loan', 'loan status']):
             return self._get_personal_loan_status()
         
-        # Interest calculation only for active loans
+        # 4. Interest calculation for active loans
         elif any(phrase in query_lower for phrase in [
-            'next interest', 
-            'installment interest',
-            'payment interest',
-            'next month interest',
-            'interest for next month',
-            'next month interest'
+            'next interest', 'installment interest', 'payment interest', 'next month interest', 'interest for next month'
         ]):
             return self._calculate_installment_interest(query)
         
-        # 3. Specific Loan Details
-        elif any(word in query_lower for word in ['home loan', 'personal loan', 'business loan']):
+        # 5. Specific Loan Details
+        elif any(word in query_lower for word in ['home loan', 'personal loan', 'business loan', 'medical loan']):
             return self._get_specific_loan_info(query_lower)
         
-        # 4. Interest Rate Queries
-        elif "interest rate" in query_lower or "interest" in query_lower:
+        # 6. Interest Rate Queries
+        elif 'interest rate' in query_lower:
             return self._handle_interest_rate_question(query_lower)
         
-        # 5. Calculation Requests
+        # 7. Calculation Requests
         elif any(term in query_lower for term in ['calculate', 'emi', 'monthly payment']):
             return self._financial_calculator(query)
         
         return self._get_loan_help_message()
-    
+
     def _get_loan_criteria(self, query: str) -> str:
         """Handle loan eligibility/criteria questions using database data"""
         query_lower = query.lower()
@@ -417,12 +415,6 @@ class BankingAssistant:
         
         # Handle unrecognized loan types (e.g., medical loan)
         if not loan_type:
-            if 'medical loan' in query_lower:
-                return (
-                    "We currently don't offer a specific 'Medical Loan' product.\n"
-                    "However, you may use a Personal Loan for medical expenses.\n"
-                    "Would you like to know the requirements for a Personal Loan?"
-                )
             available_loans = Loans.objects.filter(is_active=True).values_list('loanType', flat=True)
             return (
                 "Please specify a valid loan type (e.g., 'personal loan requirements').\n"
@@ -432,29 +424,32 @@ class BankingAssistant:
         # Build response using database data
         response = f"Requirements for {loan_type.loanType}:\n"
         
-        # Handle minimum balance requirement (not in database, so provide fallback)
+        # Handle minimum balance requirement (using minAmount)
         if 'minimum balance' in query_lower or 'min balance' in query_lower:
-            response += (
-                "- Minimum balance requirement: Not specified for this loan. "
-                "Please contact the bank for details.\n"
-            )
-        
-        # Fetch requirements from database
-        requirements = loan_type.requirements
-        if requirements:
-            response += f"{requirements}\n"
+            if loan_type.minAmount is not None:
+                response += f"- Minimum balance requirement: NPR {loan_type.minAmount:,.2f}\n"
+            else:
+                response += "- Minimum balance requirement: Not specified.\n"
+            # Optionally include maxAmount for completeness
+            if loan_type.maxAmount is not None:
+                response += f"- Maximum balance allowed: NPR {loan_type.maxAmount:,.2f}\n"
         else:
-            logger.warning(f"No requirements found for loan type: {loan_type.loanType}")
-            response += (
-                "- No specific requirements listed. "
-                "Please contact the bank for detailed eligibility criteria.\n"
-            )
+            # Include general requirements for non-specific queries
+            requirements = loan_type.requirements
+            if requirements:
+                response += f"{requirements}\n"
+            else:
+                logger.warning(f"No requirements found for loan type: {loan_type.loanType}")
+                response += (
+                    "- No specific requirements listed. "
+                    "Please contact the bank for detailed eligibility criteria.\n"
+                )
         
         # Add standard loan details from database
         response += "\nAdditional Details:\n"
-        if loan_type.minAmount:
+        if loan_type.minAmount and ('minimum balance' not in query_lower and 'min balance' not in query_lower):
             response += f"- Minimum amount: NPR {loan_type.minAmount:,.2f}\n"
-        if loan_type.maxAmount:
+        if loan_type.maxAmount and ('minimum balance' not in query_lower and 'min balance' not in query_lower):
             response += f"- Maximum amount: NPR {loan_type.maxAmount:,.2f}\n"
         response += f"- Interest rate: {loan_type.interestRate}%\n"
         if loan_type.minTerm:
@@ -843,8 +838,8 @@ class BankingAssistant:
             elif any(term in query_lower for term in ['convert', 'exchange', 'change', 'forex', 'foreign exchange']) or \
                  (('rate' in query_lower or 'rates' in query_lower) and any(c in query_lower for c in ['usd', 'npr', 'inr', 'eur', 'gbp', 'jpy', 'rupee', 'dollar', 'euro', 'pound', 'yen'])):
                 query_type = QueryType.CALCULATIONS
-            elif 'interest rate' in query_lower and 'loan' in query_lower:
-                query_type = QueryType.DIRECT
+            elif 'interest rate' in query_lower or 'interest rates' in query_lower:
+                query_type = QueryType.DIRECT  # Updated to cover general interest rate queries
             
             response = ""
             source = "Agent/LLM"
