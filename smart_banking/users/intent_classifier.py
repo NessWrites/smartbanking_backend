@@ -181,10 +181,18 @@ class QueryClassifier:
         
         
         if not self._is_banking_related(query):
-            raise ValueError("This query is not related to banking.")
+            raise ValueError("This query is not related to banking I can help on banking queries only. Thank you for using our service.")
         
         try:
             query_lower = query.lower()
+                
+                # Force CALCULATIONS for specific interest queries
+            if any(phrase in query_lower for phrase in [
+                'what is my interest payment', 'interest for next month', 'next month interest',
+                'how much interest will i pay', 'installment interest', 'next payment interest'
+            ]):
+                logger.debug(f"Forcing CALCULATIONS for interest query: {query}")
+                return QueryType.CALCULATIONS
             # First check for specific interest calculation patterns
             interest_phrases = [
                 'next interest',
@@ -235,17 +243,11 @@ class QueryClassifier:
             # If not strongly identified as calculation, proceed with normal pattern matching order
             query_type = self._pattern_match(query)
             if query_type:
-                logger.debug(f"Pattern match result (after enhanced check): {query_type}")
                 return query_type
-
-            # Final fallback if no patterns matched
-            # If it contains numbers, maybe it's a calculation missed? Or direct (e.g., account number)? Defaulting to DIRECT is safer.
-            logger.debug(f"No specific patterns matched, falling back to DIRECT for query: {query}")
             return QueryType.DIRECT
-
         except Exception as e:
             logger.error(f"Classification error for query '{query}': {str(e)}", exc_info=True)
-            return QueryType.STEPS  # Safe fallback in case of unexpected errors
+            return QueryType.STEPS
 
 class BankingAssistant:
     """Main banking assistant class with context-aware capabilities"""
