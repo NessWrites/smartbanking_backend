@@ -405,7 +405,7 @@ class BankingAssistant:
         return self._get_loan_help_message()
     
     def _get_loan_criteria(self, query: str) -> str:
-        """Handle loan eligibility/criteria questions"""
+        """Handle loan eligibility/criteria questions using database data"""
         query_lower = query.lower()
         
         # Identify loan type from query
@@ -415,95 +415,56 @@ class BankingAssistant:
                 loan_type = product
                 break
         
+        # Handle unrecognized loan types (e.g., medical loan)
         if not loan_type:
-            # If no specific loan mentioned, show general criteria
+            if 'medical loan' in query_lower:
+                return (
+                    "We currently don't offer a specific 'Medical Loan' product.\n"
+                    "However, you may use a Personal Loan for medical expenses.\n"
+                    "Would you like to know the requirements for a Personal Loan?"
+                )
+            available_loans = Loans.objects.filter(is_active=True).values_list('loanType', flat=True)
             return (
-                "General loan requirements:\n"
-                "1. Valid citizenship certificate\n"
-                "2. Minimum age: 18 years\n"
-                "3. Regular income source\n"
-                "4. Good credit history\n\n"
-                "Please specify a loan type for specific criteria (e.g., 'education loan requirements')."
+                "Please specify a valid loan type (e.g., 'personal loan requirements').\n"
+                f"Available loans: {', '.join(available_loans) if available_loans else 'None'}."
             )
         
-        # Loan-specific criteria
+        # Build response using database data
         response = f"Requirements for {loan_type.loanType}:\n"
         
-        if loan_type.loanType.lower() == "education loan":
+        # Handle minimum balance requirement (not in database, so provide fallback)
+        if 'minimum balance' in query_lower or 'min balance' in query_lower:
             response += (
-                "1. Admission letter from recognized institution\n"
-                "2. Fee structure from the institution\n"
-                "3. Parent/guardian as co-signer\n"
-                "4. Academic transcripts\n"
-                f"5. Minimum amount: NPR {loan_type.minAmount:,.2f}\n"
-                f"Interest rate: {loan_type.interestRate}%\n\n"
-                "Would you like to apply for this loan?"
-            )
-        elif loan_type.loanType.lower() == "personal loan":
-            response += (
-                "1. 3 months salary slips\n"
-                "2. Employment verification\n"
-                "3. Bank statements (6 months)\n"
-                f"4. Minimum amount: NPR {loan_type.minAmount:,.2f}\n"
-                f"Interest rate: {loan_type.interestRate}%\n\n"
-                "Apply at any branch with these documents."
-            )
-        else:
-            response += (
-                f"1. Minimum amount: NPR {loan_type.minAmount:,.2f}\n"
-            f"2. Maximum amount: NPR {loan_type.maxAmount:,.2f}\n"
-            f"3. Interest rate: {loan_type.interestRate}%\n"
-            f"4. Minimum term: {loan_type.minTerm} months\n"
-            f"5. Maximum term: {loan_type.maxTerm} months\n"
-            "6. Valid citizenship document\n\n"
-            "Visit our website or branch for complete details."
+                "- Minimum balance requirement: Not specified for this loan. "
+                "Please contact the bank for details.\n"
             )
         
+        # Fetch requirements from database
+        requirements = loan_type.requirements
+        if requirements:
+            response += f"{requirements}\n"
+        else:
+            logger.warning(f"No requirements found for loan type: {loan_type.loanType}")
+            response += (
+                "- No specific requirements listed. "
+                "Please contact the bank for detailed eligibility criteria.\n"
+            )
+        
+        # Add standard loan details from database
+        response += "\nAdditional Details:\n"
+        if loan_type.minAmount:
+            response += f"- Minimum amount: NPR {loan_type.minAmount:,.2f}\n"
+        if loan_type.maxAmount:
+            response += f"- Maximum amount: NPR {loan_type.maxAmount:,.2f}\n"
+        response += f"- Interest rate: {loan_type.interestRate}%\n"
+        if loan_type.minTerm:
+            response += f"- Minimum term: {loan_type.minTerm} months\n"
+        if loan_type.maxTerm:
+            response += f"- Maximum term: {loan_type.maxTerm} months\n"
+        
+        response += "\nVisit a branch or our website to apply."
+        
         return response
-
-    def _suggest_loan_types(self, loans) -> str:
-        """Suggest available loan types when none is specified"""
-        loan_names = [loan.loanType for loan in loans]
-        return (
-            f"Please specify which loan you're interested in. "
-            f"We offer: {', '.join(loan_names)}. "
-            f"For example: 'What's the interest rate for {loan_names[0]}?'"
-        )
-    
-    def _handle_transaction_query(self, query: str) -> str:
-        """Handle transaction history queries with dynamic limit"""
-        try:
-            # 1. Authentication check
-            if not self.user_id:
-                return "Please log in to view your transaction history."
-    
-            # 2. Parse requested transaction count (default to 5)
-            count = 5
-            if "last transaction" in query.lower():
-                count = 1
-            else:
-                numbers = re.findall(r'\d+', query)
-                if numbers:
-                    count = min(int(numbers[0]), 20)  # Max 20 transactions
-    
-            # 3. Get transactions
-            account = Account.objects.get(user__id=self.user_id)
-            transactions = Transactions.objects.filter(
-                accountID=account
-            ).order_by('-date')[:count]
-            
-            if not transactions.exists():
-                return "No transactions found."
-                
-            # 4. Return serialized data
-            serializer = TransactionsSerializer(transactions, many=True)
-            return str(serializer.data)
-    
-        except Account.DoesNotExist:
-            return "Account not found. Please contact customer support."
-        except Exception as e:
-            logger.error(f"Transaction error: {str(e)}")
-            return "Unable to retrieve transactions. Please try again later."
     
     def _handle_balance_query(self) -> str:
         """Handle balance queries"""
