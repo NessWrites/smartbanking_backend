@@ -641,44 +641,31 @@ class BankingAssistant:
         )
     
     def _calculate_installment_interest(self, query: str) -> str:
-        """Calculate interest for next installment based on user's active loan"""
         try:
             if not self.user_id:
                 return "Please log in to view your loan details."
-            
-            # Get only ACTIVE loans
-            active_loans = LoanAccount.objects.filter(
-            account__user__id=self.user_id,
-            status='active'  # Only active loans
-        )
-        
+            active_loans = LoanAccount.objects.filter(account__user__id=self.user_id, status='active')
             if not active_loans.exists():
-            # Helpful message that distinguishes no loans vs no active loans
                 all_loans = LoanAccount.objects.filter(account__user__id=self.user_id)
                 if all_loans.exists():
-                    return "You have no active loans currently. Your loans are pending approval."
+                    return "You have no active loans. Your loans may be pending, paid off, or rejected."
                 return "You don't have any loans."
-        
             loan = active_loans.first()
             monthly_interest = (loan.outstanding * loan.interest_rate) / (12 * 100)
-
-            
-            # Calculate days until next payment (for more accurate daily interest if needed)
             from datetime import date
-            days_until_payment = (loan.next_payment_date - date.today()).days
-            
+            next_payment_date = loan.next_payment_date or (date.today() + timedelta(days=30))
+            days_until_payment = (next_payment_date - date.today()).days
             return (
                 f"Next Installment Interest Calculation for your {loan.product.loanType}:\n"
                 f"- Outstanding Principal: NPR {loan.outstanding:,.2f}\n"
                 f"- Annual Interest Rate: {loan.interest_rate}%\n"
                 f"- Monthly Interest: NPR {monthly_interest:,.2f}\n"
-                f"- Next Payment Due: {loan.next_payment_date} (in {days_until_payment} days)\n\n"
+                f"- Next Payment Due: {next_payment_date} (in {days_until_payment} days)\n\n"
                 f"Note: Your actual payment may include both principal and interest components."
             )
-            
         except Exception as e:
-            logger.error(f"Installment interest calculation error: {str(e)}")
-            return "Unable to calculate your installment interest. Please try again later."
+            logger.error(f"Installment interest calculation error: {str(e)}", exc_info=True)
+            return "Unable to calculate your installment interest. Please check your loan status or contact support."
 
     def _get_loan_products_list(self) -> str:
         """List all available loan products"""
