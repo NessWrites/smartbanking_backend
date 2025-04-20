@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import logging
 from typing import Dict, Any, Optional, List
@@ -57,6 +57,7 @@ class QueryClassifier:
                 re.compile(r'installment interest', re.IGNORECASE),
                 re.compile(r'next (payment|installment)', re.IGNORECASE),
                 re.compile(r'how much interest', re.IGNORECASE),
+                re.compile(r'\b(what is|how much)\s+my\s+(interest\s+)?next\s+month\b', re.IGNORECASE),
             
                 # Keep other calculation patterns
                 re.compile(r'calculat(e|ion)', re.IGNORECASE),
@@ -67,7 +68,7 @@ class QueryClassifier:
                 re.compile(r'\b(what is\s+the\s+)?exchange\s+rate(s)?\b', re.IGNORECASE),  # Added for exchange rate queries
                 re.compile(r'\b(convert|exchange|change)\b', re.IGNORECASE), # Explicit conversion actions
                 re.compile(r'\b(foreign\s+exchange|forex|currency)\s+rate(s)?\b', re.IGNORECASE), # Asking for rates
-                re.compile(r'\b(exchange|currency|forex)\s+rate(s)?\s+(for|of|between)\b', re.IGNORECASE)
+                re.compile(r'\b(exchange|currency|forex)\s+rate(s)?\s+(for|of|between)\b', re.IGNORECASE),
                 re.compile(r'how\s+much\s+.*?\s+(is|in)\s+.*?', re.IGNORECASE), # How much X is Y / How much X in Y
                 re.compile(r'\d+\s*(dollar|euro|pound|yen|rupee|usd|eur|gbp|jpy|inr|npr)s?\s+(to|in|into)', re.IGNORECASE), # Specific conversion format N CUR to/in...
                 re.compile(r'(to|in|into)\s+\d+\s*(dollar|euro|pound|yen|rupee|usd|eur|gbp|jpy|inr|npr)s?', re.IGNORECASE), # Specific conversion format ...to/in N CUR
@@ -96,6 +97,7 @@ class QueryClassifier:
                 
             ],
             QueryType.DIRECT: [
+                re.compile(r'\b(what\s+(are|is)\s+the\s+)?interest\s+rate(s)?\s+(on|for)\s+(loans?|different\s+loans?)\b', re.IGNORECASE),
                 re.compile(r'\b(my|check|view|show)\s+(balance|transactions?|loans?)\b', re.IGNORECASE),
                 re.compile(r'\b(account\s+statement|loan\s+status)\b', re.IGNORECASE),
                 re.compile(r'\btypes?\s+of\s+loans?\b', re.IGNORECASE),
@@ -558,7 +560,8 @@ class BankingAssistant:
                 'installment interest',
                 'interest for next month',  # Added for queries like "calculate my interest for next month"
                 'next month interest',
-                'interest next month'
+                'interest next month',
+                'my interest next month'  # Explicitly add this phrasing
             ]):
                 return self._calculate_installment_interest(query)
             
@@ -639,7 +642,7 @@ class BankingAssistant:
             f"Tenure: {months} months\n"
             f"Monthly EMI: NPR {emi:,.2f}"
         )
-    
+        
     def _calculate_installment_interest(self, query: str) -> str:
         try:
             if not self.user_id:
@@ -648,11 +651,17 @@ class BankingAssistant:
             if not active_loans.exists():
                 all_loans = LoanAccount.objects.filter(account__user__id=self.user_id)
                 if all_loans.exists():
-                    return "You have no active loans. Your loans may be pending, paid off, or rejected."
-                return "You don't have any loans."
+                    return (
+                        "You have no active loans. Your loans may be pending, paid off, or rejected.\n"
+                        "Would you like to check your loan status or learn about available loans?"
+                    )
+                return (
+                    "You don't have any loans.\n"
+                    "Would you like to explore our loan products?"
+                )
             loan = active_loans.first()
             monthly_interest = (loan.outstanding * loan.interest_rate) / (12 * 100)
-            from datetime import date
+            from datetime import date, timedelta
             next_payment_date = loan.next_payment_date or (date.today() + timedelta(days=30))
             days_until_payment = (next_payment_date - date.today()).days
             return (
@@ -665,7 +674,10 @@ class BankingAssistant:
             )
         except Exception as e:
             logger.error(f"Installment interest calculation error: {str(e)}", exc_info=True)
-            return "Unable to calculate your installment interest. Please check your loan status or contact support."
+            return (
+                "Unable to calculate your installment interest at this time.\n"
+                "Please verify your loan status or contact support for assistance."
+            )
 
     def _get_loan_products_list(self) -> str:
         """List all available loan products"""
@@ -857,45 +869,29 @@ class BankingAssistant:
             return f"Sorry, I couldn’t convert {amount:,.2f} {from_currency or 'unknown'} to {to_currency or 'unknown'}. Please try again."
     
     def process_query(self, query: str) -> BankingResponse:
-        """Main entry point with enhanced currency conversion handling"""
         try:
             query_lower = query.lower()
             query_type = self.classifier.classify(query)
-            logger.debug(f"Classified '{query}' as {query_type}")
             
-            # Initialize response to ensure it’s always defined
+            # Existing overrides for CALCULATIONS and DIRECT
+            if any(phrase in query_lower for phrase in [
+                'next interest', 'next month interest', 'upcoming interest', 'installment interest',
+                'next payment interest', 'how much interest will i pay', 'interest for next month', 'my interest next month', 
+            ]):
+                query_type = QueryType.CALCULATIONS
+            elif any(term in query_lower for term in ['convert', 'exchange', 'change', 'forex', 'foreign exchange']) or \
+                 (('rate' in query_lower or 'rates' in query_lower) and any(c in query_lower for c in ['usd', 'npr', 'inr', 'eur', 'gbp', 'jpy', 'rupee', 'dollar', 'euro', 'pound', 'yen'])):
+                query_type = QueryType.CALCULATIONS
+            elif 'interest rate' in query_lower and 'loan' in query_lower:
+                query_type = QueryType.DIRECT
+            
             response = ""
-            source = "Agent/LLM"  # Default source
-    
-            # Force CALCULATIONS for interest queries
-            interest_phrases = [
-                'next interest',
-                'next month interest',
-                'upcoming interest',
-                'installment interest',
-                'next payment interest',
-                'how much interest will i pay',
-                'interest for next month'
-            ]
-            if any(phrase in query_lower for phrase in interest_phrases):
-                query_type = QueryType.CALCULATIONS
-                logger.debug(f"Overriding to CALCULATIONS for interest query: {query}")
-            
-            # Force CALCULATIONS for currency and exchange rate queries
-            if any(term in query_lower for term in ['convert', 'exchange', 'change', 'rate', 'forex', 'foreign exchange']):
-                query_type = QueryType.CALCULATIONS
-                logger.debug(f"Overriding to CALCULATIONS for currency/rate query: {query}")
-    
-            # Handle based on query type
+            source = "Agent/LLM"
             if query_type == QueryType.CALCULATIONS:
-                if any(term in query_lower for term in ['convert', 'exchange', 'change', 'rate', 'forex', 'foreign exchange']):
-                    if 'rate' in query_lower and not any(indicator in query_lower for indicator in ['rupee', 'inr', 'npr', 'dollar', 'usd', 'euro', 'eur', 'pound', 'gbp']):
-                        # Handle general exchange rate queries
-                        response = self._currency_converter("1 USD to NPR")
-                        source = "CurrencyConverter Tool (Default USD-NPR)"
-                    else:
-                        response = self._currency_converter(query)
-                        source = "CurrencyConverter Tool"
+                if any(term in query_lower for term in ['convert', 'exchange', 'change', 'forex', 'foreign exchange']) or \
+                   (('rate' in query_lower or 'rates' in query_lower) and any(c in query_lower for c in ['usd', 'npr', 'inr', 'eur', 'gbp', 'jpy', 'rupee', 'dollar', 'euro', 'pound', 'yen'])):
+                    response = self._currency_converter(query)
+                    source = "CurrencyConverter Tool"
                 else:
                     response = self._financial_calculator(query)
                     source = "FinancialCalculator Tool"
@@ -908,12 +904,12 @@ class BankingAssistant:
                     source = "Custom Response"
                 else:
                     response = self._handle_database_query(query)
-                    logger.debug("Handling DIRECT query in process_query")
             elif query_type == QueryType.STEPS:
                 response = self._generate_steps_response(query)
             else:
                 response = self.agent.invoke({"input": query})["output"]
-    
+                source = "Fine-tuned LLM"
+            
             self._update_chat_history(query, response)
             return BankingResponse(
                 query=query,
@@ -922,32 +918,19 @@ class BankingAssistant:
                 confidence=0.9,
                 context=self.context.copy()
             )
-            
         except ValueError as ve:
-            if any(term in query.lower() for term in ['convert', 'exchange', 'change', 'inr', 'npr', 'usd', 'eur', 'gbp']):
-                response = "Please specify a currency conversion, e.g., 'convert 100 USD to NPR'."
-            elif 'insurance' in query.lower():
-                response = "We currently don’t offer insurance services. Try asking about loans, accounts, or currency exchange."
+            if self._is_banking_related(query):
+                response = self.agent.invoke({"input": query})["output"]
+                source = "Fine-tuned LLM (Banking Fallback)"
             else:
                 response = "Please specify your banking query, e.g., 'check my balance' or 'convert 100 USD to NPR'."
-            logger.debug(f"ValueError caught for query '{query}': {str(ve)}")
             self._update_chat_history(query, response)
-            return BankingResponse(
-                query=query,
-                type=QueryType.STEPS,
-                response=response,
-                confidence=0.9
-            )
+            return BankingResponse(query=query, type=QueryType.STEPS, response=response, confidence=0.9)
         except Exception as e:
             logger.error(f"Processing error: {str(e)}", exc_info=True)
-            response = "I couldn't process your request. Please try again with a specific banking query."
+            response = self.agent.invoke({"input": query})["output"]
             self._update_chat_history(query, response)
-            return BankingResponse(
-                query=query,
-                type=QueryType.STEPS,
-                response=response,
-                confidence=0.1
-            )
+            return BankingResponse(query=query, type=QueryType.STEPS, response=response, confidence=0.1)
 
     def _generate_steps_response(self, query: str) -> str:
         """Generate procedural instructions"""
