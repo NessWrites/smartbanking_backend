@@ -302,16 +302,24 @@ class BankingAssistant:
     
     def _initialize_tools(self) -> list:
         """Initialize the tools available to the agent"""
+        def banking_database_tool(query: str, *args, **kwargs) -> str:
+            """Handle BankingDatabase tool with flexible argument handling"""
+            # If multiple arguments are passed, concatenate them into a single string
+            if args:
+                query = f"{query} {' '.join(str(arg) for arg in args)}"
+            return self._handle_database_query(query)
+        
         return [
             Tool(
                 name="BankingDatabase",
-                func=self._handle_database_query,
+                func=banking_database_tool,
                 description=(
                     "Useful for all banking information including:"
                     "- Account balances and transactions "
                     "- Loan details and status "
                     "- Available loan products and their terms "
                     "- Interest rates and eligibility criteria "
+                    "Input: A single string query describing the banking information needed."
                 )
             ),
             Tool(
@@ -357,6 +365,8 @@ class BankingAssistant:
         elif "transaction" or "transactions" in query_lower:
             return self._handle_transaction_query(query)
         elif "balance" or "balances" in query_lower:
+            if "steps" in query_lower:
+                return self._generate_steps_response(query)
             return self._handle_balance_query()
         elif "account" or "accounts" in query_lower:
             return self._handle_account_query()
@@ -829,6 +839,9 @@ class BankingAssistant:
             query_lower = query.lower()
             query_type = self.classifier.classify(query)
             
+            # Log the classification
+            logger.debug(f"Classified query '{query}' as {query_type}")
+            
             # Existing overrides for CALCULATIONS and DIRECT
             if any(phrase in query_lower for phrase in [
                 'next interest', 'next month interest', 'upcoming interest', 'installment interest',
@@ -839,7 +852,7 @@ class BankingAssistant:
                  (('rate' in query_lower or 'rates' in query_lower) and any(c in query_lower for c in ['usd', 'npr', 'inr', 'eur', 'gbp', 'jpy', 'rupee', 'dollar', 'euro', 'pound', 'yen'])):
                 query_type = QueryType.CALCULATIONS
             elif 'interest rate' in query_lower or 'interest rates' in query_lower:
-                query_type = QueryType.DIRECT  # Updated to cover general interest rate queries
+                query_type = QueryType.DIRECT
             
             response = ""
             source = "Agent/LLM"
@@ -860,11 +873,16 @@ class BankingAssistant:
                     source = "Custom Response"
                 else:
                     response = self._handle_database_query(query)
+                    source = "BankingDatabase Tool"
             elif query_type == QueryType.STEPS:
                 response = self._generate_steps_response(query)
+                source = "Steps Handler"
             else:
                 response = self.agent.invoke({"input": query})["output"]
                 source = "Fine-tuned LLM"
+            
+            # Log the response source
+            logger.debug(f"Response source: {source} for query: {query}")
             
             self._update_chat_history(query, response)
             return BankingResponse(
@@ -884,7 +902,7 @@ class BankingAssistant:
             return BankingResponse(query=query, type=QueryType.STEPS, response=response, confidence=0.9)
         except Exception as e:
             logger.error(f"Processing error: {str(e)}", exc_info=True)
-            response = self.agent.invoke({"input": query})["output"]
+            response = "Sorry, I couldn't process your request. Please try again or contact support."
             self._update_chat_history(query, response)
             return BankingResponse(query=query, type=QueryType.STEPS, response=response, confidence=0.1)
 
@@ -910,19 +928,26 @@ class BankingAssistant:
         # Update context based on conversation
         self._update_context(query, response)
     
-    def _update_context(self, query: str, response: str):
-        """Update conversation context"""
+    def _generate_steps_response(self, query: str) -> str:
+        """Generate procedural instructions"""
         query_lower = query.lower()
         
-        # Track last mentioned loan type
-        if "loan" in query_lower:
-            for loan in Loans.objects.all():
-                if loan.loanType.lower() in query_lower:
-                    self.context['current_focus'] = loan.loanType
-                    break
+        # Handle balance check steps specifically
+        if 'balance' in query_lower and 'steps' in query_lower:
+            return (
+                "Steps to check your balance:\n"
+                "1. Log in to your online banking account using your username and password.\n"
+                "2. Navigate to the 'Account Summary' or 'Dashboard' section.\n"
+                "3. View your current balance displayed for your account.\n"
+                "4. Alternatively, use our mobile app or visit an ATM to check your balance.\n"
+                "5. For assistance, contact our customer service or visit a branch."
+            )
         
-        # Track specific actions
-        if 'available loan types:' in response:
-            self.context['last_action'] = 'listed_loan_types'
-        elif 'interest rate' in response.lower():
-            self.context['last_action'] = 'provided_interest_rate'
+        # Fallback to LLM for other steps queries
+        prompt = f"""Provide clear, numbered steps for this banking request:
+        {query}
+        
+        Instructions:"""
+        llm_response = self.llm.invoke(prompt)
+        logger.debug(f"LLM steps response for query '{query}': {llm_response}")
+        return llm_response
