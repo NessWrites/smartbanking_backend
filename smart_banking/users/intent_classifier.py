@@ -148,6 +148,14 @@ class QueryClassifier:
             'apply', 'eligibility', 'credit', 'debit', 'fund'
         }
     def _pattern_match(self, query: str) -> Optional[QueryType]:
+        query_lower = query.lower()
+        # Prioritize STEPS for "how to" queries
+        if query_lower.startswith('how to'):
+            for pattern in self.pattern_map[QueryType.STEPS]:
+                if pattern.search(query):
+                    logger.debug(f"Matched STEPS pattern {pattern.pattern} for query: {query}")
+                    return QueryType.STEPS
+        
         # Check CALCULATIONS first for currency conversions
         for pattern in self.pattern_map[QueryType.CALCULATIONS]:
             if pattern.search(query):
