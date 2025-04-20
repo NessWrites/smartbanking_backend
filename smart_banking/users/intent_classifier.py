@@ -67,7 +67,7 @@ class QueryClassifier:
                 re.compile(r'\b(what is\s+the\s+)?exchange\s+rate(s)?\b', re.IGNORECASE),  # Added for exchange rate queries
                 re.compile(r'\b(convert|exchange|change)\b', re.IGNORECASE), # Explicit conversion actions
                 re.compile(r'\b(foreign\s+exchange|forex|currency)\s+rate(s)?\b', re.IGNORECASE), # Asking for rates
-                re.compile(r'\b(rate(s)?\s+(for|of|between))\b', re.IGNORECASE), # More rate phrasings
+                re.compile(r'\b(exchange|currency|forex)\s+rate(s)?\s+(for|of|between)\b', re.IGNORECASE)
                 re.compile(r'how\s+much\s+.*?\s+(is|in)\s+.*?', re.IGNORECASE), # How much X is Y / How much X in Y
                 re.compile(r'\d+\s*(dollar|euro|pound|yen|rupee|usd|eur|gbp|jpy|inr|npr)s?\s+(to|in|into)', re.IGNORECASE), # Specific conversion format N CUR to/in...
                 re.compile(r'(to|in|into)\s+\d+\s*(dollar|euro|pound|yen|rupee|usd|eur|gbp|jpy|inr|npr)s?', re.IGNORECASE), # Specific conversion format ...to/in N CUR
