@@ -417,6 +417,42 @@ class BankingAssistant:
         
         return self._get_loan_help_message()
 
+
+    def _handle_transaction_query(self, query: str) -> str:
+        """Handle transaction history queries with dynamic limit"""
+        try:
+            # 1. Authentication check
+            if not self.user_id:
+                return "Please log in to view your transaction history."
+    
+            # 2. Parse requested transaction count (default to 5)
+            count = 5
+            if "last transaction" in query.lower():
+                count = 1
+            else:
+                numbers = re.findall(r'\d+', query)
+                if numbers:
+                    count = min(int(numbers[0]), 20)  # Max 20 transactions
+    
+            # 3. Get transactions
+            account = Account.objects.get(user__id=self.user_id)
+            transactions = Transactions.objects.filter(
+                accountID=account
+            ).order_by('-date')[:count]
+            
+            if not transactions.exists():
+                return "No transactions found."
+                
+            # 4. Return serialized data
+            serializer = TransactionsSerializer(transactions, many=True)
+            return str(serializer.data)
+    
+        except Account.DoesNotExist:
+            return "Account not found. Please contact customer support."
+        except Exception as e:
+            logger.error(f"Transaction error: {str(e)}")
+            return "Unable to retrieve transactions. Please try again later."
+    
     def _get_loan_criteria(self, query: str) -> str:
         """Handle loan eligibility/criteria questions using database data"""
         query_lower = query.lower()
