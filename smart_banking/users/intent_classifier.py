@@ -357,21 +357,26 @@ class BankingAssistant:
         
         # Check for authentication requirement
         if not self.user_id and any(word in query_lower for word in ['my', 'mine']):
+            logger.debug(f"User not logged in for query: {query}")
             return "Please log in to access your account information."
         
         # Route to appropriate handler
-        if "loan"  or "interest rate" or "interest rates" in query_lower:
-            return self._handle_loan_query(query)
-        elif "transaction" or "transactions" in query_lower:
-            return self._handle_transaction_query(query)
-        elif "balance" or "balances" in query_lower:
+        if any(keyword in query_lower for keyword in ["balance", "balances"]):
+            logger.debug(f"Routing query '{query}' to _handle_balance_query")
             if "steps" in query_lower:
                 return self._generate_steps_response(query)
             return self._handle_balance_query()
-        elif "account" or "accounts" in query_lower:
+        elif any(keyword in query_lower for keyword in ["loan", "interest rate", "interest rates"]):
+            logger.debug(f"Routing query '{query}' to _handle_loan_query")
+            return self._handle_loan_query(query)
+        elif any(keyword in query_lower for keyword in ["transaction", "transactions"]):
+            logger.debug(f"Routing query '{query}' to _handle_transaction_query")
+            return self._handle_transaction_query(query)
+        elif any(keyword in query_lower for keyword in ["account", "accounts"]):
+            logger.debug(f"Routing query '{query}' to _handle_account_query")
             return self._handle_account_query()
-
-            
+        
+        logger.debug(f"No matching handler for query: {query}")
         return "I couldn't find that information. Please try being more specific."
 
     def _handle_loan_query(self, query: str) -> str:
@@ -890,6 +895,7 @@ class BankingAssistant:
                 type=query_type,
                 response=response,
                 confidence=0.9,
+                source = source,
                 context=self.context.copy()
             )
         except ValueError as ve:
@@ -899,41 +905,102 @@ class BankingAssistant:
             else:
                 response = "Please specify your banking query, e.g., 'check my balance' or 'convert 100 USD to NPR'."
             self._update_chat_history(query, response)
-            return BankingResponse(query=query, type=QueryType.STEPS, response=response, confidence=0.9)
+            return BankingResponse(query=query,
+                                   type=QueryType.STEPS,
+                                   response=response, 
+                                   source = source,
+                                   confidence=0.9)
         except Exception as e:
             logger.error(f"Processing error: {str(e)}", exc_info=True)
             response = "Sorry, I couldn't process your request. Please try again or contact support."
             self._update_chat_history(query, response)
-            return BankingResponse(query=query, type=QueryType.STEPS, response=response, confidence=0.1)
+            return BankingResponse(query=query, type=QueryType.STEPS, response=response,source = source, confidence=0.1)
 
-    def _generate_steps_response(self, query: str) -> str:
-        """Generate procedural instructions"""
-        prompt = f"""Provide clear, numbered steps for this banking request:
-        {query}
-        
-        Instructions:"""
-        return self.llm.invoke(prompt)
     
     def _update_chat_history(self, query: str, response: str):
         """Maintain conversation history and update context"""
-        self.message_history.add_messages([
-            HumanMessage(content=query),
-            AIMessage(content=response)
-        ])
-        
-        # Trim history if needed
-        if len(self.message_history.messages) > self.max_history:
-            self.message_history.messages = self.message_history.messages[-self.max_history:]
+        try:
+            self.message_history.add_messages([
+                HumanMessage(content=query),
+                AIMessage(content=response)
+            ])
             
-        # Update context based on conversation
-        self._update_context(query, response)
+            # Trim history if needed
+            if len(self.message_history.messages) > self.max_history:
+                self.message_history.messages = self.message_history.messages[-self.max_history:]
+                
+            # Update context
+            self._update_context(query, response)
+            
+            logger.debug(f"Chat history updated for query: {query}")
+        except Exception as e:
+            logger.error(f"Error updating chat history for query '{query}': {str(e)}", exc_info=True)
+        
+        
+    def _update_context(self, query: str, response: str):
+        """Update conversation context based on query and response"""
+        query_lower = query.lower()
+        
+        # Update last_topics
+        topics = []
+        if 'balance' in query_lower:
+            topics.append('balance')
+        if 'loan' in query_lower:
+            topics.append('loan')
+        if 'interest rate' in query_lower or 'interest rates' in query_lower:
+            topics.append('interest_rate')
+        if 'transaction' in query_lower:
+            topics.append('transaction')
+        if any(term in query_lower for term in ['convert', 'exchange', 'forex']):
+            topics.append('currency_conversion')
+        if 'account' in query_lower:
+            topics.append('account')
+        
+        self.context['last_topics'] = topics[-3:]  # Keep last 3 topics
+        
+        # Update current_focus
+        if 'balance' in query_lower:
+            self.context['current_focus'] = 'balance'
+        elif 'loan' in query_lower or 'interest rate' in query_lower:
+            self.context['current_focus'] = 'loan'
+        elif 'transaction' in query_lower:
+            self.context['current_focus'] = 'transaction'
+        elif 'account' in query_lower:
+            self.context['current_focus'] = 'account'
+        elif 'convert' in query_lower or 'exchange' in query_lower:
+            self.context['current_focus'] = 'currency_conversion'
+        else:
+            self.context['current_focus'] = None
+        
+        # Update last_action
+        query_type = self.classifier.classify(query)
+        self.context['last_action'] = {
+            'query': query,
+            'type': query_type,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Update previous_loan_type
+        if 'loan' in query_lower:
+            for product in Loans.objects.filter(is_active=True):
+                if product.loanType.lower() in query_lower:
+                    self.context['previous_loan_type'] = product.loanType
+                    break
+            else:
+                self.context['previous_loan_type'] = None
+        else:
+            self.context['previous_loan_type'] = None
     
+        # Log context update
+        logger.debug(f"Updated context: {self.context}")
+        
     def _generate_steps_response(self, query: str) -> str:
         """Generate procedural instructions"""
         query_lower = query.lower()
         
         # Handle balance check steps specifically
-        if 'balance' in query_lower and 'steps' in query_lower:
+        if any(phrase in query_lower for phrase in ['check balance', 'check my balance', 'balance check']) and \
+           any(phrase in query_lower for phrase in ['steps', 'how to', 'process', 'way']):
             return (
                 "Steps to check your balance:\n"
                 "1. Log in to your online banking account using your username and password.\n"
@@ -944,6 +1011,7 @@ class BankingAssistant:
             )
         
         # Fallback to LLM for other steps queries
+        logger.debug(f"Falling back to LLM for steps query: {query}")
         prompt = f"""Provide clear, numbered steps for this banking request:
         {query}
         
