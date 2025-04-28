@@ -23,6 +23,7 @@ from rest_framework_simplejwt.views import (
 
 from core.views import index
 
+
 #smart_banking/urls.py
 urlpatterns = [
     path("admin/", admin.site.urls),

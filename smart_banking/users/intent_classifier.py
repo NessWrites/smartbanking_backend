@@ -366,8 +366,11 @@ class BankingAssistant:
             if "steps" in query_lower:
                 return self._generate_steps_response(query)
             return self._handle_balance_query()
+        #for loan query
         elif any(keyword in query_lower for keyword in ["loan", "interest rate", "interest rates"]):
             logger.debug(f"Routing query '{query}' to _handle_loan_query")
+            if "steps" in query_lower:
+                return self._generate_steps_response(query) 
             return self._handle_loan_query(query)
         elif any(keyword in query_lower for keyword in ["transaction", "transactions"]):
             logger.debug(f"Routing query '{query}' to _handle_transaction_query")

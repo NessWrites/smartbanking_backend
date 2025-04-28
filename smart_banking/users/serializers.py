@@ -86,3 +86,28 @@ class LoanApplicationSerializer(serializers.Serializer):
     product_id = serializers.IntegerField()
     amount = serializers.DecimalField(max_digits=15, decimal_places=2)
     term = serializers.IntegerField()
+    
+
+class SIPCalculationSerializer(serializers.Serializer):
+    monthly_investment = serializers.DecimalField(max_digits=15, decimal_places=2, required=True)
+    annual_return = serializers.DecimalField(max_digits=5, decimal_places=2, required=True)
+    years = serializers.IntegerField(required=True)
+    total_expected_returns = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    total_invested = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    total_gain = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+
+    def validate_monthly_investment(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Monthly investment must be greater than zero.")
+        return value
+
+    def validate_annual_return(self, value):
+        if value <= 0 or value > 100:
+            raise serializers.ValidationError("Annual return must be between 0 and 100 percent.")
+        return value
+
+    def validate_years(self, value):
+        if value <= 0 or value > 100:
+            raise serializers.ValidationError("Investment period must be between 1 and 100 years.")
+        return value

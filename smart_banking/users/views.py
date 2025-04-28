@@ -2,6 +2,7 @@
 from datetime import timedelta, timezone
 import json
 from decimal import Decimal, InvalidOperation
+import math
 import re
 
 from django.conf import settings
@@ -9,7 +10,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 #from .query_processor import QueryProcessor
-from .models import ChatConversation, CurrencyExchange, LoanAccount, Loans
+from .models import ChatConversation, CurrencyExchange, LoanAccount, Loans, SIPCalculation
 
 # Django Imports
 from django.core.exceptions import ValidationError
@@ -100,17 +101,11 @@ class LoginView(APIView):
                 return Response({
                     'refresh': str(refresh),
                     'access': str(refresh.access_token),
-                    # 'user': {
-                    #     'id': user.id,
-                    #     'username': user.username,
-                    #     'email': user.email,
-                    #     'phone': user.phone,
-                    #     'balance': str(user.account_balance)  # Include balance in response
-                    # }
+                 
                 })
-            return Response({"message": "Invalid password"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Invalid password"}, status=status.HTTP_401_UNAUTHORIZED)
         except User.DoesNotExist:
-            return Response({"message": "User not found"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"message": "User not found"}, status=status.HTTP_401_UNAUTHORIZED)
 
 # 3. User Info View (Authenticated Users Only)
 class UserInfoView(APIView):
@@ -819,3 +814,64 @@ class LoanApplicationView(APIView):
 
 def calculate_first_payment_date(term_months):
     return timezone.now().date() + timedelta(days=30)  # First payment in 1 month
+
+
+class CalculateSIPView(APIView):
+    def get(self, request):
+        try:
+            calculations = SIPCalculation.objects.all()
+            data = [
+                {
+                    "monthly_investment": calc.monthly_investment,
+                    "annual_return": calc.annual_return,
+                    "years": calc.years,
+                    "total_expected_returns": calc.total_expected_returns,
+                    "total_invested": calc.total_invested,
+                    "total_gain": calc.total_gain,
+                    "created_at": calc.created_at,
+                }
+                for calc in calculations
+            ]
+            return Response(data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def post(self, request):
+        monthly_investment = request.data.get("monthly_investment")
+        annual_return = request.data.get("annual_return")
+        years = request.data.get("years")
+
+        if not all([monthly_investment, annual_return, years]):
+            return Response({"error": "All fields are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            monthly_investment = float(monthly_investment)
+            annual_return = float(annual_return)
+            years = int(years)
+        except ValueError:
+            return Response({"error": "Invalid input values"}, status=status.HTTP_400_BAD_REQUEST)
+
+        monthly_rate = (annual_return / 100) / 12
+        months = years * 12
+        total_expected_returns = monthly_investment * (
+            (math.pow(1 + monthly_rate, months) - 1) / monthly_rate
+        ) * (1 + monthly_rate)
+        total_invested = monthly_investment * months
+        total_gain = total_expected_returns - total_invested
+
+        calc = SIPCalculation(
+            monthly_investment=monthly_investment,
+            annual_return=annual_return,
+            years=years,
+            total_expected_returns=round(total_expected_returns, 2),
+            total_invested=round(total_invested, 2),
+            total_gain=round(total_gain, 2),
+        )
+        calc.save()
+
+        response_data = {
+            "total_expected_returns": round(total_expected_returns, 2),
+            "total_invested": round(total_invested, 2),
+            "total_gain": round(total_gain, 2),
+        }
+        return Response(response_data, status=status.HTTP_200_OK)

@@ -545,3 +545,17 @@ class ChatConversation(models.Model):
         except Exception as e:
             logger.error(f"Error deleting old chat history: {str(e)}", exc_info=True)
             return 0
+
+
+class SIPCalculation(models.Model):
+
+    monthly_investment = models.FloatField()
+    annual_return = models.FloatField()
+    years = models.IntegerField()
+    total_expected_returns = models.FloatField()
+    total_invested = models.FloatField()
+    total_gain = models.FloatField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"SIP Calculation on {self.created_at}"
